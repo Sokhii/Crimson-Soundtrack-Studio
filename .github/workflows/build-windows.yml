@@ -24,16 +24,21 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python tools/fetch_llama_runtime.py --dest vendor/llama-runtime --flavor vulkan
-      - name: Unit tests (including the real llama.cpp runtime end to end)
+      - name: Fetch the vgmstream decoder (pinned by SHA-256)
+        run: python tools/fetch_vgmstream.py --dest vendor/vgmstream
+      - name: Unit tests (including the real llama.cpp runtime and vgmstream end to end)
         env:
           QT_QPA_PLATFORM: offscreen
           CSS_LLAMA_SERVER: ${{ github.workspace }}\vendor\llama-runtime\llama-server.exe
+          CSS_VGMSTREAM: ${{ github.workspace }}\vendor\vgmstream\vgmstream-cli.exe
         run: python -m pytest -q -rs
       - name: Build application folder (PyInstaller, one-folder)
         run: pyinstaller packaging/CrimsonSoundtrackStudio.spec --noconfirm --clean
       - name: Bundle the llama.cpp runtime next to the EXE
         shell: pwsh
-        run: Copy-Item -Recurse vendor/llama-runtime dist/CrimsonSoundtrackStudio/runtime/llama
+        run: |
+          Copy-Item -Recurse vendor/llama-runtime dist/CrimsonSoundtrackStudio/runtime/llama
+          Copy-Item -Recurse vendor/vgmstream dist/CrimsonSoundtrackStudio/runtime/vgmstream
       - name: Portability - self-test, GUI start and outside-write check from a moved copy
         shell: pwsh
         run: |
@@ -52,6 +57,8 @@ jobs:
           Get-Content (Join-Path $d "logs\portability.json")
           if ($p.ExitCode -ne 0) { throw "self test failed ($($p.ExitCode))" }
           if ($q.ExitCode -ne 0) { throw "portability check failed ($($q.ExitCode))" }
+          $st = Get-Content (Join-Path $d "logs\selftest.json") -Raw | ConvertFrom-Json
+          if (-not $st.checks.game_audio_decoder_works) { throw "the bundled vgmstream decoder was not exercised by the self-test" }
           foreach ($rel in "data\config\settings.json","projects\__selftest__\project.sqlite3","logs\studio.log","data\cache\audio_analysis.sqlite3") {
             if (-not (Test-Path (Join-Path $d $rel))) { throw "$rel was not created beside the EXE" }
           }

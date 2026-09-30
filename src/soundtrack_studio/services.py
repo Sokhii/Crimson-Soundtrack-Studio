@@ -13,7 +13,8 @@ import json
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+import contextlib
+from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
 from .ai import downloader, hardware
 from .ai.catalog import LocalModel, ModelCatalog, ModelError, ModelRegistry, model_status, register_custom_model
@@ -25,6 +26,8 @@ from .app_paths import AppPaths
 from .config import Settings
 from .errors import AnalyzerDbError, GameInstallError, LibraryError, ProjectError
 from .game_model.builder import load_or_build
+from .gameaudio.analysis import GameAudioAnalyzer, GameAudioCache, SourceResult
+from .gameaudio.decoder import find_vgmstream
 from .game_model.model import GameMusicModel
 from .library.cache import AnalysisCache
 from .library.scanner import LibraryScanner, ScanProgress, ScanStats
@@ -70,6 +73,7 @@ class Studio:
         self._model: Optional[GameMusicModel] = None
         self._cache: Optional[AnalysisCache] = None
         self._response_cache: Optional[ResponseCache] = None
+        self._game_audio_cache: Optional[GameAudioCache] = None
         self._backend: Optional[InferenceBackend] = None
         self._hardware: Optional[hardware.HardwareInfo] = None
         self.registry = ModelRegistry(paths)
@@ -86,6 +90,9 @@ class Studio:
         if self._response_cache is not None:
             self._response_cache.close()
             self._response_cache = None
+        if self._game_audio_cache is not None:
+            self._game_audio_cache.close()
+            self._game_audio_cache = None
         self.settings.save(self.paths)
 
     @property
@@ -99,6 +106,12 @@ class Studio:
         if self._response_cache is None:
             self._response_cache = ResponseCache(self.paths.cache / "ai_responses.sqlite3")
         return self._response_cache
+
+    @property
+    def game_audio_cache(self) -> GameAudioCache:
+        if self._game_audio_cache is None:
+            self._game_audio_cache = GameAudioCache(self.paths.cache / "game_audio.sqlite3")
+        return self._game_audio_cache
 
     # ------------------------------------------------------------- projects
     def list_projects(self) -> List[ProjectInfo]:
@@ -390,6 +403,134 @@ class Studio:
         state = self.registry.state(model.id)
         return state.get("sha256") or f"{model.id}:{state.get('size') or ''}"
 
+
+    # ----------------------------------------------------------- game audio
+    def game_audio_available(self) -> Tuple[bool, str]:
+        """Whether the game's music can be decoded now, and if not, why (plain language)."""
+
+        if self.project is None:
+            return False, "Open a project first."
+        ref = self.project.active_analyzer()
+        if not ref:
+            return False, "Import an Analyzer database first."
+        game_path = self.project.get("game_path")
+        if not game_path or not Path(game_path).is_dir():
+            return False, "Select your Crimson Desert folder first."
+        if find_vgmstream(self.paths, self.settings.vgmstream_path) is None:
+            return False, "The audio decoder (vgmstream) is missing from the 'runtime\\vgmstream' folder."
+        latest = self.project.last_game_check()
+        if latest and latest.get("status") in (compat.MISMATCH, compat.NOT_GAME):
+            return False, "The Crimson Desert folder does not match the Analyzer database."
+        return True, ""
+
+    @contextlib.contextmanager
+    def _game_audio(self) -> Iterator[GameAudioAnalyzer]:
+        from .analyzer_db.importer import open_snapshot
+
+        ok, reason = self.game_audio_available()
+        if not ok:
+            raise GameInstallError(reason)
+        project = self.require_project()
+        ref = project.active_analyzer()
+        conn = open_snapshot(self.paths.from_stored(ref["snapshot_path"]))
+        try:
+            yield GameAudioAnalyzer(self.paths, Path(project.get("game_path")), conn, ref["installation_id"],
+                                    self.game_audio_cache, find_vgmstream(self.paths, self.settings.vgmstream_path))
+        finally:
+            conn.close()
+
+    def cue_sources(self, cue) -> List[int]:
+        """The audio of a cue's primary track (the music a replacement would take the place of)."""
+
+        from .compiler.plan import primary_track
+
+        model = self.game_model()
+        segment = model.nodes.get(cue.segment_id) if model else None
+        primary = primary_track(model, segment) if segment is not None else None
+        if primary is None:
+            return list(cue.source_ids)
+        return [s for s in primary.source_ids] or list(cue.source_ids)
+
+    def game_music_sources(self) -> List[int]:
+        model = self.game_model()
+        if model is None:
+            return []
+        out: List[int] = []
+        for cue in model.cues:
+            out.extend(self.cue_sources(cue))
+        return list(dict.fromkeys(out))
+
+    def analyze_game_audio(self, progress=None, cancel=None, retry_errors: bool = False,
+                           listen: bool = True) -> Dict[str, Any]:
+        """Decode (read-only, in temp/) and measure the game's music; listen to it when a listening model is on."""
+
+        sources = self.game_music_sources()
+        listener, listen_key = (self.listening_callable(progress) if listen else (None, ""))
+        with self._game_audio() as analyzer:
+            results = analyzer.analyze(sources, listener, listen_key, progress, cancel, retry_errors)
+        summary = self._game_audio_summary(results)
+        project = self.require_project()
+        project.set("game_audio_last_run", {"at": now_iso(), **summary})
+        if summary["errors"]:
+            examples = [r.error for r in results.values() if r.status == "error"][:5]
+            project.add_event("warning", "game_audio", f"{summary['errors']} game music files could not be decoded; "
+                              "they are described from their names only.", "\n".join(examples))
+        return summary
+
+    @staticmethod
+    def _game_audio_summary(results: Dict[int, SourceResult]) -> Dict[str, Any]:
+        return {"sources": len(results), "ok": sum(1 for r in results.values() if r.status == "ok"),
+                "errors": sum(1 for r in results.values() if r.status == "error"),
+                "missing": sum(1 for r in results.values() if r.status == "missing"),
+                "listened": sum(1 for r in results.values() if r.listening)}
+
+    def game_audio_results(self) -> Dict[int, SourceResult]:
+        """Stored results only; never reads the game files. Empty when game audio is unavailable."""
+
+        if not self.game_audio_available()[0]:
+            return {}
+        listen_key = self.listening_key()
+        with self._game_audio() as analyzer:
+            return {sid: analyzer.cached(sid, listen_key) for sid in self.game_music_sources()}
+
+    def game_audio_check(self, count: int = 6) -> Dict[str, Any]:
+        """Decode a few game music files without keeping anything; for the 'Test decoding' button."""
+
+        from .gameaudio.decoder import version
+
+        with self._game_audio() as analyzer:
+            report = analyzer.decode_check(self.game_music_sources(), count)
+            report["decoder"] = str(analyzer.vgmstream)
+            try:
+                report["decoder_version"] = version(analyzer.vgmstream)
+            except Exception as exc:  # noqa: BLE001 - informational only
+                report["decoder_version"] = f"unknown ({exc})"
+        (self.paths.logs / "game_audio_check.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+        return report
+
+    def cue_audio(self, cue, results: Dict[int, SourceResult]) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+        """(measurements, listening) for a cue from its primary-track sources; the longest decoded source wins."""
+
+        best: Optional[SourceResult] = None
+        for sid in self.cue_sources(cue):
+            r = results.get(sid)
+            if r is not None and r.status == "ok" and (best is None or (r.decoded_s or 0) > (best.decoded_s or 0)):
+                best = r
+        if best is None:
+            return None, None
+        return best.features or None, best.listening or None
+
+    # ------------------------------------------------------------ listening
+    def listening_key(self) -> str:
+        """Cache key of the active listening model ("" = no listening model)."""
+
+        return ""
+
+    def listening_callable(self, progress=None):
+        """(listener, key) for the active listening model, or (None, "")."""
+
+        return None, ""
+
     # ------------------------------------------------------------ semantics
     def semantic_store(self) -> SemanticStore:
         return SemanticStore(self.require_project(), self.response_cache)
@@ -401,8 +542,16 @@ class Studio:
         model = self.game_model()
         if model is None:
             return []
-        return [(str(c.segment_id), cue_document(model, c)) for c in model.cues
-                if include_short_cues or not self.is_short_cue(c)]
+        audio = self.game_audio_results()
+        items = []
+        for c in model.cues:
+            if include_short_cues or not self.is_short_cue(c):
+                measured, heard = self.cue_audio(c, audio) if audio else (None, None)
+                items.append((str(c.segment_id), cue_document(model, c, measured, self.heard_summary(heard))))
+        return items
+
+    def heard_summary(self, listening: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        return None
 
     @staticmethod
     def is_short_cue(cue) -> bool:
@@ -419,6 +568,12 @@ class Studio:
                 progress("Starting the local AI model", 0, 0)
             backend.start()
         results = {}
+        if self.settings.analyze_game_audio and self.game_audio_available()[0]:
+            try:
+                self.analyze_game_audio(progress, cancel)
+            except (GameInstallError, AnalyzerDbError) as exc:
+                self.require_project().add_event("warning", "game_audio", f"The game's music was not analysed: {exc.message}",
+                                                 getattr(exc, "details", ""))
         tracks = self.semantic_items("track")
         results["track"] = store.run("track", tracks, backend, model_key, progress, cancel)
         store.forget_missing("track", [k for k, _d in tracks])

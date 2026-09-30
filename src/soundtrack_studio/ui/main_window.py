@@ -267,6 +267,42 @@ class MainWindow(QMainWindow):
         self.run_job("Describing music" + (" with the local AI" if use_ai else " (rule-based)"),
                      lambda report, cancelled: self.studio.analyze_semantics(use_ai, report, cancelled), on_done=done)
 
+    def analyze_game_audio(self) -> None:
+        if self.studio.project is None:
+            return
+
+        def done(summary) -> None:
+            self.refresh(reload_game_data=True)
+            text = f"Game audio: {summary['ok']} of {summary['sources']} music files decoded and measured"
+            if summary["errors"]:
+                text += f", {summary['errors']} could not be decoded (see Home > events)"
+            self.statusBar().showMessage(text + ".", 15000)
+
+        self.run_job("Analysing the game's music",
+                     lambda report, cancelled: self.studio.analyze_game_audio(report, cancelled), on_done=done)
+
+    def test_game_audio(self) -> None:
+        if self.studio.project is None:
+            return
+
+        def done(report) -> None:
+            lines = [f"Decoded {report['decoded']} of {report['checked']} game music files "
+                     f"({report.get('decoder_version', '')})."]
+            for item in report["items"]:
+                if item.get("ok"):
+                    lines.append(f"✓ {item['source_id']} ({item['stored']}): {item['decoded_s']:.1f} s, "
+                                 f"{item['channels']} ch" + (f" - {item['note']}" if item.get("note") else ""))
+                else:
+                    lines.append(f"✗ {item['source_id']} ({item['stored']}): {item.get('error', '')[:200]}")
+            lines.append("")
+            lines.append("Decoding works: the game's music can be analysed." if report["passed"] else
+                         "Some files could not be decoded; those cues are described from their names only. "
+                         "Details: logs/game_audio_check.json")
+            self.info("Game audio decoding test", "\n".join(lines))
+
+        self.run_job("Testing game audio decoding",
+                     lambda report, cancelled: self.studio.game_audio_check(), on_done=done)
+
     def confirm(self, title: str, text: str) -> bool:
         return QMessageBox.question(self, title, text) == QMessageBox.StandardButton.Yes
 

@@ -105,12 +105,7 @@ def _genre(profile: SemanticProfile, genre: str, evidence: List[str]) -> None:
                     evidence.append(f"genre '{genre}' suggests {tag}")
 
 
-def describe_track(doc: Dict[str, Any]) -> Tuple[SemanticProfile, List[str]]:
-    p = SemanticProfile(source="rules", confidence=0.25)
-    evidence: List[str] = []
-    _genre(p, doc.get("genre", ""), evidence)
-    _apply_words(p, _words(doc.get("title"), doc.get("album"), doc.get("file_name"), doc.get("comment")), evidence)
-    m = doc.get("measurements", {})
+def _apply_measurements(p: SemanticProfile, m: Dict[str, Any], evidence: List[str]) -> None:
     energy = m.get("energy_index")
     brightness = m.get("brightness_index")
     band = m.get("band_energy") or {}
@@ -145,6 +140,39 @@ def describe_track(doc: Dict[str, Any]) -> Tuple[SemanticProfile, List[str]]:
     flat = m.get("spectral_flatness")
     if flat is not None and flat > 0.3 and "electronic" not in p.style:
         evidence.append("noise-like spectrum")
+
+
+HEARD_FIELDS = ("mood", "emotion", "atmosphere", "instrumentation", "style")
+
+
+def _apply_heard(p: SemanticProfile, heard: Dict[str, Any], evidence: List[str]) -> None:
+    """Tags the listening model heard in the audio itself (``listening.summary`` format)."""
+
+    if not heard:
+        return
+    for field_name in HEARD_FIELDS:
+        for tag, strength in (heard.get(field_name) or {}).items():
+            target = getattr(p, field_name)
+            if tag not in target and (strength == "strong" or len(target) < 3):
+                target.append(tag)
+                evidence.append(f"heard {tag} ({strength})")
+    vocals = heard.get("vocals")
+    if vocals == "instrumental":
+        p.vocal_presence = False
+        evidence.append("heard: instrumental")
+    elif vocals == "sung vocals":
+        p.vocal_presence = True
+        evidence.append("heard: sung vocals")
+    p.confidence = max(p.confidence or 0, 0.4)
+
+
+def describe_track(doc: Dict[str, Any]) -> Tuple[SemanticProfile, List[str]]:
+    p = SemanticProfile(source="rules", confidence=0.25)
+    evidence: List[str] = []
+    _genre(p, doc.get("genre", ""), evidence)
+    _apply_words(p, _words(doc.get("title"), doc.get("album"), doc.get("file_name"), doc.get("comment")), evidence)
+    _apply_measurements(p, doc.get("measurements") or {}, evidence)
+    _apply_heard(p, doc.get("heard") or {}, evidence)
     p.summary = "Rule-based estimate from tags and measurements: " + (p.describe() if p.describe() != "no description"
                                                                          else "little evidence available") + "."
     return normalize(p), evidence
@@ -175,6 +203,11 @@ def describe_cue(doc: Dict[str, Any]) -> Tuple[SemanticProfile, List[str]]:
     if duration and duration > 150 and not p.mood:
         p.atmosphere.append("atmospheric")
         evidence.append("long, looping-length segment")
+    if doc.get("measurements"):
+        _apply_measurements(p, doc["measurements"], evidence)
+        p.confidence = max(p.confidence or 0, 0.3)
+        evidence.append("measured from the decoded game audio")
+    _apply_heard(p, doc.get("heard") or {}, evidence)
     for tag in p.mood:
         if tag in ("tense", "aggressive"):
             p.tension = max(p.tension or 0, 0.75)
@@ -183,6 +216,7 @@ def describe_cue(doc: Dict[str, Any]) -> Tuple[SemanticProfile, List[str]]:
         if tag in ("peaceful", "serene"):
             p.tension = min(p.tension if p.tension is not None else 1, 0.2)
             p.energy = min(p.energy if p.energy is not None else 1, 0.35)
-    p.summary = ("Rule-based estimate from Wwise names and structure: "
+    p.summary = ("Rule-based estimate from Wwise names, structure"
+                 + (" and the decoded audio" if doc.get("measurements") else "") + ": "
                  + (p.describe() if p.describe() != "no description" else "no descriptive names available") + ".")
     return normalize(p), evidence

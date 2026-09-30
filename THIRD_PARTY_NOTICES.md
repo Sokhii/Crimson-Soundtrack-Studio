@@ -11,8 +11,10 @@ Crimson Soundtrack Studio is MIT-licensed (see `LICENSE`). The portable build bu
 | [cryptography](https://cryptography.io/) | Apache-2.0 / BSD-3-Clause | ChaCha20 decryption when reading original soundbanks |
 | [python-lz4](https://github.com/python-lz4/python-lz4) | BSD-3-Clause | LZ4 decompression of game archive entries |
 | [libsndfile](https://libsndfile.github.io/libsndfile/) (bundled by soundfile, with FLAC/Ogg/Vorbis/Opus) | LGPL-2.1 (FLAC/Ogg/Vorbis: BSD-style) | audio decoding; shipped as a separate shared library |
+| [llama.cpp](https://github.com/ggml-org/llama.cpp) (`runtime/llama/`) | MIT | local AI runtime (separate program) |
+| [vgmstream](https://github.com/vgmstream/vgmstream) (`runtime/vgmstream/`) | ISC-style; its bundled decoder libraries under their own licences (libvorbis/libogg: BSD; mpg123, FFmpeg: LGPL, as separate DLLs) | decodes the game's Wwise audio for the read-only game-audio analysis (separate program) |
 
-No GPL-licensed code is bundled. FLAC metadata is read by the Studio's own parser
+No GPL-licensed code is bundled (LGPL libraries are shipped as separate, replaceable shared libraries). FLAC metadata is read by the Studio's own parser
 (`src/soundtrack_studio/library/flac_meta.py`) for that reason.
 
 The Analyzer schema file `src/soundtrack_studio/testing/analyzer_schema_v1.sql` is copied from

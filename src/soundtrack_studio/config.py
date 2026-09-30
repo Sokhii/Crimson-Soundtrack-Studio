@@ -31,6 +31,10 @@ class Settings:
     ai_gpu_layers: str = "auto"               # "auto", "0" (CPU only) or a layer count
     ai_threads: int = 0                       # 0 = llama.cpp default
     llama_server_path: str = ""               # empty = bundled runtime/llama/
+    analyze_game_audio: bool = True           # decode the game's music read-only (temp/) and measure it
+    vgmstream_path: str = ""                  # empty = bundled runtime/vgmstream/
+    listening_model_id: str = ""              # optional listening model (CLAP); "" = off
+    listening_device: str = "auto"            # auto (GPU when available) | cpu
     window_geometry: str = ""                 # hex-encoded QByteArray
     extra: Dict[str, Any] = field(default_factory=dict)
 

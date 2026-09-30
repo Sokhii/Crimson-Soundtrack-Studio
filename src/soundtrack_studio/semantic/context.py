@@ -5,9 +5,11 @@ Each track or game cue is turned into a small, deterministic JSON document of
 both the rule-based describer and the local AI, and its hash identifies the
 input for caching: if the facts do not change, nothing is recomputed.
 
-Game cues cannot be listened to (the Studio does not decode game audio), so
-their evidence is the Wwise structure and names recorded by the Analyzer, plus
-public community notes where the Analyzer imported them.
+Game cues are described from the Wwise structure and names recorded by the
+Analyzer, public community notes where the Analyzer imported them, and - once
+the game's audio has been decoded (read-only, see ``gameaudio``) - the same
+signal measurements as user tracks. When the optional listening model is used,
+both sides also carry what it *heard* (instruments, vocals, mood, style).
 """
 
 from __future__ import annotations
@@ -15,11 +17,11 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from ..game_model.model import GameMusicModel, MusicCue
 
-CONTEXT_VERSION = 1
+CONTEXT_VERSION = 1  # unchanged docs keep their hash; new evidence (measurements, heard) changes it
 
 
 def input_hash(kind: str, doc: Dict[str, Any]) -> str:
@@ -31,8 +33,19 @@ def _r(value, digits=2):
     return None if value is None else round(float(value), digits)
 
 
-def track_document(track: Dict[str, Any]) -> Dict[str, Any]:
-    """``track`` is a row from ``Studio.library_tracks()``."""
+def _measurements(f: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "tempo_bpm_estimate": f.get("tempo_bpm"), "tempo_confidence": _r(f.get("tempo_confidence")),
+        "energy_index": f.get("energy_index"), "brightness_index": f.get("brightness_index"),
+        "average_level_dbfs": f.get("rms_dbfs"), "level_spread_db": f.get("level_spread_db"),
+        "onsets_per_second": f.get("onset_rate"), "attack_ratio": f.get("broadband_onset_ratio"),
+        "stereo_width": f.get("stereo_width"), "band_energy": f.get("band_energy") or None,
+        "spectral_flatness": f.get("spectral_flatness"), "silence_ratio": f.get("silence_ratio"),
+    }
+
+
+def track_document(track: Dict[str, Any], heard: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """``track`` is a row from ``Studio.library_tracks()``; ``heard`` a listening summary (``listening.summary``)."""
 
     f = track.get("features") or {}
     raw_tags = {}
@@ -48,19 +61,16 @@ def track_document(track: Dict[str, Any]) -> Dict[str, Any]:
         "album_artist": track.get("album_artist"), "composer": track.get("composer"), "genre": track.get("genre"),
         "year": track.get("year"), "comment": comment or None,
         "duration_s": _r(track.get("duration_s"), 1), "channels": track.get("channels"),
-        "measurements": {
-            "tempo_bpm_estimate": f.get("tempo_bpm"), "tempo_confidence": _r(f.get("tempo_confidence")),
-            "energy_index": f.get("energy_index"), "brightness_index": f.get("brightness_index"),
-            "average_level_dbfs": f.get("rms_dbfs"), "level_spread_db": f.get("level_spread_db"),
-            "onsets_per_second": f.get("onset_rate"), "attack_ratio": f.get("broadband_onset_ratio"),
-            "stereo_width": f.get("stereo_width"), "band_energy": f.get("band_energy") or None,
-            "spectral_flatness": f.get("spectral_flatness"), "silence_ratio": f.get("silence_ratio"),
-        },
+        "measurements": _measurements(f),
+        "heard": heard or None,
     }
     return _prune(doc)
 
 
-def cue_document(model: GameMusicModel, cue: MusicCue) -> Dict[str, Any]:
+def cue_document(model: GameMusicModel, cue: MusicCue, audio: Optional[Dict[str, Any]] = None,
+                 heard: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """``audio``: measurements of the decoded game audio (``Studio.cue_audio``); ``heard``: listening summary."""
+
     media = [model.media[s] for s in cue.source_ids if s in model.media]
     names: List[str] = []
     for label in cue.path_labels:
@@ -82,6 +92,8 @@ def cue_document(model: GameMusicModel, cue: MusicCue) -> Dict[str, Any]:
         "track_layers": len(tracks), "track_types": sorted({t.track_type or "normal" for t in tracks}),
         "is_transition": cue.is_transition, "markers": len(cue.markers),
         "channels": cue.channels, "reused_by_containers": cue.parent_count,
+        "measurements": _measurements(audio) if audio else None,
+        "heard": heard or None,
     }
     return _prune(doc)
 

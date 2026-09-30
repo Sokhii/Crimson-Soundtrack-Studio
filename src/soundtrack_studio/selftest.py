@@ -158,6 +158,28 @@ def run_selftest(paths: AppPaths, keep: bool = False) -> Dict[str, Any]:
         checks["mod_built_and_validated"] = (result.validation.ok and paths.is_inside(result.output_dir)
                                              and len(result.report["files"]) == 2)
         checks["game_untouched_by_build"] = _tree_fingerprint(build_game) == before_build_game
+        # game audio: the bundled decoder must read the Studio's own Wwise PCM output exactly; the fake install's
+        # placeholder 'Vorbis' files must be refused cleanly (reported, not fatal)
+        from .gameaudio.decoder import decode, find_vgmstream
+
+        decoder = find_vgmstream(paths, studio.settings.vgmstream_path)
+        if decoder is None:
+            info["game_audio"] = "decoder not bundled (source run): skipped"
+        else:
+            import soundfile as sf
+
+            wav = paths.temp / "selftest_decode.wav"
+            decode(decoder, result.output_dir / "files" / "0004" / "sound" / "433831842.wem", wav)
+            frames = sf.info(str(wav)).frames
+            wav.unlink(missing_ok=True)
+            report = studio.game_audio_check()
+            info["game_audio"] = {"decoder": str(decoder), "built_wem_frames": frames,
+                                  "placeholder_check": {k: report[k] for k in ("checked", "decoded")}}
+            from .app_paths import is_frozen
+
+            checks["game_audio_decoder_works"] = (frames == 180 * 48000 and report["checked"] >= 2
+                                                  and (paths.is_inside(decoder) or not is_frozen()))
+            checks["game_untouched_by_audio_check"] = _tree_fingerprint(build_game) == before_build_game
         studio.settings.save(paths)
         checks["settings_in_app_folder"] = paths.settings_file.is_file() and paths.is_inside(paths.settings_file)
         checks["logs_in_app_folder"] = (paths.logs / "studio.log").is_file()

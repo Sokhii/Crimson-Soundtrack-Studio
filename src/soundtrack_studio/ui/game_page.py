@@ -28,6 +28,17 @@ class NumItem(QTableWidgetItem):
         return self.key < getattr(other, "key", 0)
 
 
+def _heard_text(summary: dict) -> str:
+    parts = []
+    if summary.get("vocals"):
+        parts.append(summary["vocals"])
+    for field in ("instrumentation", "mood", "atmosphere", "style", "emotion"):
+        tags = summary.get(field) or {}
+        if tags:
+            parts.append(", ".join(f"{t} ({s})" for t, s in tags.items()))
+    return " · ".join(parts)
+
+
 class GameDataPage(QWidget):
     def __init__(self, host) -> None:
         super().__init__()
@@ -43,6 +54,23 @@ class GameDataPage(QWidget):
         self.summary = QLabel("Import an Analyzer database on the Home page to browse the game's music.")
         self.summary.setWordWrap(True)
         layout.addWidget(self.summary)
+        audio_bar = QHBoxLayout()
+        self.audio_status = QLabel("")
+        self.audio_status.setWordWrap(True)
+        self.audio_status.setToolTip("The game's music is decoded read-only into the program's temp folder, measured "
+                                     "(and listened to, when a listening model is on) and deleted again. Only the "
+                                     "measurements are kept. The game folder is never changed.")
+        audio_bar.addWidget(self.audio_status, 1)
+        self.audio_btn = QPushButton("Analyse game audio")
+        self.audio_btn.setToolTip("Decode the game's music (read-only) and measure it, so game cues are described "
+                                  "from their actual sound, not only from their names.")
+        self.audio_btn.clicked.connect(lambda: self.host.analyze_game_audio())
+        self.check_btn = QPushButton("Test decoding")
+        self.check_btn.setToolTip("Decode a few game music files and report whether it works; nothing is kept.")
+        self.check_btn.clicked.connect(lambda: self.host.test_game_audio())
+        audio_bar.addWidget(self.audio_btn)
+        audio_bar.addWidget(self.check_btn)
+        layout.addLayout(audio_bar)
         bar = QHBoxLayout()
         self.filter = QLineEdit()
         self.filter.setPlaceholderText("Filter by name, ID, state or event…")
@@ -90,6 +118,7 @@ class GameDataPage(QWidget):
         side_layout.addWidget(self.edit_btn)
         split.addWidget(side)
         self.profiles = {}
+        self.audio_results = {}
         split.setSizes([640, 420])
         layout.addWidget(split, 1)
         self._current = None
@@ -99,6 +128,7 @@ class GameDataPage(QWidget):
         self.model = model
         self.cue_by_segment = {c.segment_id: c for c in model.cues} if model else {}
         self.profiles = self.host.studio.profiles("cue") if model is not None and self.host.studio.project else {}
+        self.refresh_audio_status(model)
         self.tree.clear()
         self.cues.setRowCount(0)
         self.banks.setRowCount(0)
@@ -117,6 +147,36 @@ class GameDataPage(QWidget):
         self._fill_cues(model)
         self._fill_banks(model)
         self.apply_filter(self.filter.text())
+
+    def refresh_audio_status(self, model: Optional[GameMusicModel]) -> None:
+        studio = self.host.studio
+        self.audio_results = {}
+        if model is None or studio.project is None:
+            self.audio_status.setText("")
+            self.audio_btn.setEnabled(False)
+            self.check_btn.setEnabled(False)
+            return
+        ok, reason = studio.game_audio_available()
+        self.audio_btn.setEnabled(ok)
+        self.check_btn.setEnabled(ok)
+        if not ok:
+            self.audio_status.setText(f"Game audio: not analysed. {reason}")
+            return
+        try:
+            self.audio_results = studio.game_audio_results()
+        except Exception as exc:  # noqa: BLE001 - status line only
+            self.audio_status.setText(f"Game audio: status unavailable ({getattr(exc, 'message', exc)})")
+            return
+        done = sum(1 for r in self.audio_results.values() if r.status == "ok")
+        failed = sum(1 for r in self.audio_results.values() if r.status == "error")
+        heard = sum(1 for r in self.audio_results.values() if r.listening)
+        total = len(self.audio_results)
+        text = f"Game audio: {done} of {total} music files decoded and measured"
+        if failed:
+            text += f", {failed} could not be decoded"
+        if heard:
+            text += f", {heard} listened to"
+        self.audio_status.setText(text + ".")
 
     def _fill_tree(self, model: GameMusicModel) -> None:
         self.tree.setUpdatesEnabled(False)
@@ -266,8 +326,30 @@ class GameDataPage(QWidget):
         self.edit_btn.setEnabled(str(ident) in self.profiles)
         html = self._node_html(node)
         if node.kind == "segment":
+            html += self._audio_html(node)
             html += profile_html(self.profiles.get(str(ident)), "Musical character (inferred)")
         self.details.setHtml(html)
+
+    def _audio_html(self, node: MusicNode) -> str:
+        cue = self.cue_by_segment.get(node.object_id)
+        if cue is None or not self.audio_results:
+            return ""
+        measured, heard = self.host.studio.cue_audio(cue, self.audio_results)
+        if not measured:
+            errors = [self.audio_results[s].error for s in self.host.studio.cue_sources(cue)
+                      if s in self.audio_results and self.audio_results[s].status == "error"]
+            return (f"<p style='color:#c98a00'>⚠ The audio of this cue could not be decoded: {esc(errors[0])}</p>"
+                    if errors else "")
+        parts = []
+        for label, key, fmt in (("energy", "energy_index", "{:.2f}"), ("brightness", "brightness_index", "{:.2f}"),
+                                ("level", "rms_dbfs", "{:.0f} dBFS"), ("tempo", "tempo_bpm", "{:.0f} BPM (estimate)")):
+            if measured.get(key) is not None:
+                parts.append(f"{label} {fmt.format(measured[key])}")
+        out = "<h4>Measured from the game audio</h4><p>" + esc(" · ".join(parts) or "no measurements") + "</p>"
+        summary = self.host.studio.heard_summary(heard)
+        if summary:
+            out += "<h4>Heard by the listening model</h4><p>" + esc(_heard_text(summary)) + "</p>"
+        return out
 
     def _node_html(self, node: MusicNode) -> str:
         m = self.model
