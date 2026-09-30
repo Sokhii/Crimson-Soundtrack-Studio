@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+build/
+dist/
+
+# Portable data created when running from source (see app_paths.py)
+dev_home/
+
+# Never commit models, game files or user music
+*.gguf
+*.wem
+*.bnk
+*.paz
+*.pamt
+*.flac
+!tests/fixtures/*.flac
+
+# SQLite side files
+*.sqlite3-wal
+*.sqlite3-shm
+*.sqlite3-journal
+vendor/

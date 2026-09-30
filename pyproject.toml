@@ -1,0 +1,37 @@
+[project]
+name = "crimson-soundtrack-studio"
+dynamic = ["version"]
+description = "Portable music replacement mod builder for Crimson Desert (consumes Crimson Desert Analyzer databases)"
+requires-python = ">=3.11"
+readme = "README.md"
+license = { text = "MIT" }
+dependencies = [
+    "PySide6-Essentials>=6.7,<7",
+    "numpy>=1.26",
+    "soundfile>=0.12",
+    "cryptography>=42",
+    "lz4>=4.3",
+]
+
+[project.scripts]
+crimson-soundtrack-studio = "soundtrack_studio.app:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.dynamic]
+version = { attr = "soundtrack_studio.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+soundtrack_studio = ["testing/*.sql", "testing/*.zip", "testing/*.sqlite3", "resources/*.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "analyzer_db: requires a real Analyzer database (set CSS_REAL_ANALYZER_DB)",
+    "slow: longer-running tests (large libraries, subprocess self-tests)",
+]

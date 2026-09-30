@@ -1,0 +1,4 @@
+-r requirements.txt
+pytest>=8
+pyinstaller>=6.6
+gguf>=0.10      # tools/make_tiny_gguf.py (integration test model)
