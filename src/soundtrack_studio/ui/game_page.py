@@ -28,16 +28,25 @@ class NumItem(QTableWidgetItem):
         return self.key < getattr(other, "key", 0)
 
 
+HEARD_GROUPS = (("instrumentation", "Instruments"), ("style", "Style"), ("mood", "Mood"), ("atmosphere", "Atmosphere"),
+                ("emotion", "Emotion"), ("rhythm", "Rhythm"), ("texture", "Texture"))
+
+
 def _heard_text(summary: dict) -> str:
-    parts = []
+    """One line per group: the standout words with their 0-100 scores (higher = clearer standout)."""
+
+    lines = []
     if summary.get("vocals"):
-        where = f" (singing heard in {summary['vocals_excerpts']} excerpts)" if summary.get("vocals_excerpts") else ""
-        parts.append(summary["vocals"] + where)
-    for field in ("instrumentation", "mood", "atmosphere", "style", "emotion"):
-        tags = summary.get(field) or {}
+        where = f", singing heard in {summary['vocals_excerpts']} excerpts" if summary.get("vocals_excerpts") else ""
+        score = f" {summary['vocals_score']}/100" if summary.get("vocals_score") is not None else ""
+        lines.append(f"Vocals: {summary['vocals']}{score}{where}")
+    for key, label in HEARD_GROUPS:
+        tags = summary.get(key) or {}
         if tags:
-            parts.append(", ".join(f"{t} ({s})" for t, s in tags.items()))
-    return " · ".join(parts)
+            lines.append(f"{label}: " + ", ".join(f"{t} {s}" for t, s in tags.items()))
+    if summary.get("calibrated") is False:
+        lines.append("(scores are provisional: too little music analysed yet to compare against)")
+    return "\n".join(lines)
 
 
 class GameDataPage(QWidget):
@@ -349,7 +358,7 @@ class GameDataPage(QWidget):
         out = "<h4>Measured from the game audio</h4><p>" + esc(" · ".join(parts) or "no measurements") + "</p>"
         summary = self.host.studio.heard_summary(heard)
         if summary:
-            out += "<h4>Heard by the listening model</h4><p>" + esc(_heard_text(summary)) + "</p>"
+            out += "<h4>Heard by the listening model</h4><p>" + esc(_heard_text(summary)).replace("\n", "<br>") + "</p>"
         return out
 
     def _node_html(self, node: MusicNode) -> str:

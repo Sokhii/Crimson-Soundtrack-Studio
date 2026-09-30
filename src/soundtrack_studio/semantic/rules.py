@@ -143,19 +143,22 @@ def _apply_measurements(p: SemanticProfile, m: Dict[str, Any], evidence: List[st
 
 
 HEARD_FIELDS = ("mood", "emotion", "atmosphere", "instrumentation", "style")
+HEARD_OTHER = ("rhythm", "texture")       # groups the profile has no field for: they become themes
+HEARD_CLEAR = 90                          # a heard tag is taken over from this score; from 85 while the field is short
 
 
 def _apply_heard(p: SemanticProfile, heard: Dict[str, Any], evidence: List[str]) -> None:
-    """Tags the listening model heard in the audio itself (``listening.summary`` format)."""
+    """Standout tags the listening model heard in the audio itself (``Calibration.summary`` format: group ->
+    {word: score 0-100}). Words outside the profile vocabulary are moved to the free-form themes by ``normalize``."""
 
     if not heard:
         return
-    for field_name in HEARD_FIELDS:
-        for tag, strength in (heard.get(field_name) or {}).items():
-            target = getattr(p, field_name)
-            if tag not in target and (strength == "strong" or len(target) < 3):
+    for field_name in HEARD_FIELDS + HEARD_OTHER:
+        for tag, score in (heard.get(field_name) or {}).items():
+            target = p.themes if field_name in HEARD_OTHER else getattr(p, field_name)
+            if tag not in target and (score >= HEARD_CLEAR or len(target) < 3):
                 target.append(tag)
-                evidence.append(f"heard {tag} ({strength})")
+                evidence.append(f"heard {tag} ({score}/100)")
     vocals = heard.get("vocals")
     if vocals == "instrumental":
         p.vocal_presence = False

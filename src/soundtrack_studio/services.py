@@ -78,6 +78,8 @@ class Studio:
         self._clap = None
         self._clap_key = ""
         self._prompt_bank = None
+        self._listening_epoch = 0          # bumped whenever what was heard (or the library) changes
+        self._calibration = None           # (signature, Calibration)
         self._backend: Optional[InferenceBackend] = None
         self._hardware: Optional[hardware.HardwareInfo] = None
         self.registry = ModelRegistry(paths)
@@ -257,6 +259,7 @@ class Studio:
         if not path:
             raise LibraryError("Choose a music folder first.")
         stats = LibraryScanner(project, self.analysis_cache).scan(Path(path), progress, cancel)
+        self._listening_epoch += 1
         if stats.errors:
             project.add_event("warning", "library", f"{stats.errors} music files could not be read.",
                               "\n".join(stats.error_samples))
@@ -477,6 +480,7 @@ class Studio:
         with self._game_audio() as analyzer:
             results = analyzer.analyze(sources, listener, listen_key, progress, cancel, retry_errors)
         summary = self._game_audio_summary(results)
+        self._listening_epoch += 1
         project = self.require_project()
         project.set("game_audio_last_run", {"at": now_iso(), **summary})
         if summary["errors"]:
@@ -613,6 +617,7 @@ class Studio:
         self._clap = None
         self._clap_key = ""
         self._prompt_bank = None
+        self._listening_epoch += 1
 
     def _load_clap(self, progress=None):
         from .listening.clap import load_model
@@ -700,6 +705,7 @@ class Studio:
         if errors:
             self.require_project().add_event("warning", "listening", f"{len(errors)} tracks could not be listened to.",
                                              "\n".join(errors[:20]))
+        self._listening_epoch += 1
         return stats
 
     def track_listening(self) -> Dict[int, Dict[str, Any]]:
@@ -714,12 +720,7 @@ class Studio:
                 out[t["id"]] = result
         return out
 
-    def heard_summary(self, listening: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-        """What the listening model heard (vocabulary tags, vocals), or None."""
-
-        if not listening or not listening.get("embedding"):
-            return None
-        key = listening.get("model") or self.listening_key()
+    def _prompt_bank_for(self, key: str):
         bank = self._prompt_bank if (self._prompt_bank is not None and key == self._clap_key) else None
         if bank is None:
             bank = self.listening_cache.prompt_bank(key)
@@ -730,7 +731,42 @@ class Studio:
                 except Exception as exc:  # noqa: BLE001 - summaries are optional
                     log.warning("Listening prompts unavailable: %s", exc)
                     return None
-        return bank.summary(listening) if bank is not None else None
+        return bank if bank is not None and bank.complete() else None
+
+    def calibration(self):
+        """Per-word baselines over everything analysed (your tracks plus the game's music); None without listening."""
+
+        from .listening.calibration import Calibration
+
+        key = self.listening_key()
+        if not key or self.project is None:
+            return None
+        signature = (key, self._listening_epoch, self.project.folder)
+        if self._calibration is not None and self._calibration[0] == signature:
+            return self._calibration[1]
+        bank = self._prompt_bank_for(key)
+        if bank is None:
+            return None
+        model = self.game_model() if self.project.active_analyzer() else None
+        tracks, cues = self.sound_embeddings(model) if model is not None else (
+            {tid: e for tid, e in self._track_embeddings(key).items()}, {})
+        calibration = Calibration(bank, list(tracks.values()) + list(cues.values()))
+        self._calibration = (signature, calibration)
+        return calibration
+
+    def _track_embeddings(self, key: str) -> Dict[int, Any]:
+        from .listening.listen import embedding_of
+
+        return {tid: e for tid, r in self.track_listening().items()
+                if r.get("model") == key and (e := embedding_of(r)) is not None}
+
+    def heard_summary(self, listening: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        """What the listening model heard: vocals (verdict + 0-100) and standout tags with 0-100 scores, or None."""
+
+        if not listening or not listening.get("embedding"):
+            return None
+        calibration = self.calibration()
+        return calibration.summary(listening) if calibration is not None else None
 
     # ------------------------------------------------------------ semantics
     def semantic_store(self) -> SemanticStore:

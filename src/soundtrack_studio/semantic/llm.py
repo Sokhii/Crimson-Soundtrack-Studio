@@ -12,7 +12,7 @@ from .profile import CATEGORIES, ProfileParseError, SemanticProfile, json_schema
 
 log = logging.getLogger(__name__)
 
-PROMPT_VERSION = 2
+PROMPT_VERSION = 3
 
 SYSTEM = (
     "You are an experienced music supervisor. You describe the thematic and emotional character of music so it can "
@@ -25,7 +25,9 @@ SYSTEM = (
 
 HEARD_RULES = (
     " If the evidence has 'heard', a listening model listened to the audio itself: trust what it heard over names, "
-    "tags and genre (strong = clearly present, moderate = likely)."
+    "tags and genre. Its tags carry a score out of 100 (how clearly this piece stands out for that word compared "
+    "with the rest of the music analysed; 85 and above is shown, 95+ is unmistakable). Use the highest-scoring words "
+    "for your tags and put other heard words (rhythm, texture, specific instruments and genres) in 'themes'."
 )
 VOCAL_RULES = (
     " vocal_presence: if 'heard' says 'sung vocals' use true, if it says 'instrumental' use false. Otherwise use true "

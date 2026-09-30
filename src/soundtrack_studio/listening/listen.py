@@ -5,9 +5,9 @@ file (seeking, never decoding the whole file), skips near-silent ones, and
 stores the mean CLAP audio embedding. Everything else is derived from that
 embedding at read time:
 
-* **heard summary** - zero-shot scores of the profile vocabulary (instruments,
-  mood, style, ...) and of vocals vs instrumental, from prompt embeddings
-  computed once per model and cached;
+* **heard summary** - calibrated 0-100 scores of the listening vocabulary (instruments, mood, style,
+  rhythm, texture, ...) and of vocals vs instrumental, from prompt embeddings computed once per model and
+  cached (see ``calibration.py``);
 * **sounds alike** - the cosine similarity of two embeddings (matching).
 
 So thresholds or prompts can change without listening to anything again.
@@ -20,14 +20,14 @@ import sqlite3
 import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence
 
 import numpy as np
 
 from ..app_paths import os_path
 from ..compiler.audio import resample
-from ..semantic.profile import CATEGORIES
 from .clap import ClapModel, ListeningError
+from .vocabulary import VOCABULARY, prompts_for
 
 LISTEN_VERSION = 2   # 2: per-excerpt embeddings (vocals are judged per excerpt)
 EXCERPT_S = 10.0
@@ -35,14 +35,6 @@ MAX_EXCERPTS = 6
 SILENT_DBFS = -50.0
 
 # prompt templates per vocabulary category; each term's score is the mean over its templates
-TEMPLATES: Dict[str, Tuple[str, ...]] = {
-    "mood": ("{} music", "a {} piece of music"),
-    "emotion": ("music that expresses {}", "music full of {}"),
-    "atmosphere": ("{} music", "music with a {} atmosphere"),
-    "instrumentation": ("music featuring {}", "the sound of {}"),
-    "style": ("{} music", "a piece of {} music"),
-}
-SUMMARY_FIELDS = ("instrumentation", "mood", "atmosphere", "style", "emotion")
 VOCAL_PROMPTS = ("a song with a singer singing lyrics", "music with sung vocals", "a vocalist singing a melody",
                  "a woman singing", "a man singing", "a pop song with a lead singer")
 INSTRUMENTAL_PROMPTS = ("instrumental music without vocals", "an instrumental piece with no singing",
@@ -63,15 +55,15 @@ VOCAL_PAIRS = (("a song with vocals", "a song without vocals"), ("singing", "no 
 PAIR_WEIGHT = 3.0
 VOCAL_MARGIN = 0.05                # an excerpt with singing
 VOCAL_SHARE = 1 / 3              # share of excerpts that must have singing (at least one): 2 of 6
-STRONG_Z, MODERATE_Z, MAX_PER_FIELD = 1.6, 1.0, 3
-PROMPT_EMBED_VERSION = 4   # 4: vocal pair prompts; 3: fp16 text tower (identical to PyTorch); 2: int8 tower one at a time
+VOCAL_SCORE_WIDTH = 0.06           # softness of the 0-100 vocals score around VOCAL_MARGIN
+PROMPT_EMBED_VERSION = 5   # 5: listening vocabulary (~340 words); 4: vocal pairs; 3: fp16 text tower; 2: one prompt at a time
 
 
 def all_prompts() -> List[str]:
     prompts: List[str] = []
-    for category, terms in CATEGORIES.items():
+    for category, terms in VOCABULARY.items():
         for term in terms:
-            prompts += [t.format(term) for t in TEMPLATES[category]]
+            prompts += list(prompts_for(category, term))
     pair_prompts = [p for pair in VOCAL_PAIRS for p in pair]
     return list(dict.fromkeys(prompts + list(VOCAL_PROMPTS) + list(INSTRUMENTAL_PROMPTS) + pair_prompts))
 
@@ -183,29 +175,11 @@ class PromptBank:
         return _vocal_decision([self.vocal_margin(e) for e in parts])
 
     def summary(self, result: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-        """What the listening model heard, in the profile vocabulary (``semantic.rules._apply_heard`` format)."""
+        """What was heard, scored relative to this piece alone (no reference music); see ``Calibration``."""
 
-        emb = embedding_of(result)
-        if emb is None or not self.complete():
-            return None
-        out: Dict[str, Any] = {"source": "listening model (CLAP)"}
-        out.update(self.vocals(result))
-        for category in SUMMARY_FIELDS:
-            terms = CATEGORIES[category]
-            scores = np.array([self._score(emb, [t.format(term) for t in TEMPLATES[category]]) for term in terms])
-            sd = float(scores.std()) or 1.0
-            z = (scores - float(scores.mean())) / sd
-            picked = {}
-            for i in np.argsort(-z)[:MAX_PER_FIELD]:
-                if z[i] >= STRONG_Z:
-                    picked[terms[i]] = "strong"
-                elif z[i] >= MODERATE_Z:
-                    picked[terms[i]] = "moderate"
-            if category == "instrumentation" and out["vocals"] != "sung vocals":
-                picked.pop("solo voice", None)        # a voice-like timbre is not evidence of vocals by itself
-            if picked:
-                out[category] = picked
-        return out
+        from .calibration import Calibration
+
+        return Calibration(self).summary(result)
 
 
 def _vocal_decision(margins: List[float]) -> Dict[str, Any]:
@@ -218,8 +192,11 @@ def _vocal_decision(margins: List[float]) -> Dict[str, Any]:
         verdict = "instrumental"
     else:
         verdict = "unclear"
-    return {"vocals": verdict, "vocals_excerpts": f"{sung} of {n}", "vocals_margin": round(float(np.mean(margins)), 3),
-            "vocals_margins": [round(float(m), 3) for m in margins]}
+    # the excerpt that decides the verdict (the 'needed'-th strongest) on a 0-100 scale: above 50 = sung vocals
+    deciding = sorted(margins, reverse=True)[needed - 1]
+    score = 100.0 / (1.0 + float(np.exp(-(deciding - VOCAL_MARGIN) / VOCAL_SCORE_WIDTH)))
+    return {"vocals": verdict, "vocals_score": int(round(score)), "vocals_excerpts": f"{sung} of {n}",
+            "vocals_margin": round(float(np.mean(margins)), 3), "vocals_margins": [round(float(m), 3) for m in margins]}
 
 
 class ListeningCache:

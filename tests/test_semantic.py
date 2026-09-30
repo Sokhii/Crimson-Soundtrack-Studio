@@ -185,7 +185,8 @@ def test_heard_evidence_decides_vocals_and_feeds_rules():
     from soundtrack_studio.semantic import llm
 
     heard = {"source": "listening model (CLAP)", "vocals": "instrumental", "vocals_margin": -0.04,
-             "instrumentation": {"strings": "strong", "choir": "moderate"}, "mood": {"melancholic": "strong"}}
+             "instrumentation": {"strings": 96, "choir": 88}, "mood": {"melancholic": 93},
+             "rhythm": {"slow tempo": 91}}
     doc = {"title": "Epic Vocal Anthem", "genre": "Soundtrack", "heard": heard}
     # the text model claims vocals from the title/genre; what was heard wins
     claims = _json.loads(GOOD)
@@ -200,6 +201,7 @@ def test_heard_evidence_decides_vocals_and_feeds_rules():
     # rules use heard tags for tracks and cues
     p, evidence = rules.describe_track(doc)
     assert "strings" in p.instrumentation and "melancholic" in p.mood and p.vocal_presence is False
+    assert "slow tempo" in p.themes                      # groups without a profile field become themes
     assert any(e.startswith("heard") for e in evidence)
     c, _ = rules.describe_cue({"structure_names": ["Field_A"], "heard": heard,
                                "measurements": {"energy_index": 0.2, "brightness_index": 0.3}})
@@ -207,4 +209,4 @@ def test_heard_evidence_decides_vocals_and_feeds_rules():
     # instructions tell the text model what counts as evidence of vocals
     text = llm.build_messages("track", doc)[1]["content"]
     assert "NOT evidence of vocals" in text and "listening model" in text
-    assert llm.PROMPT_VERSION == 2
+    assert llm.PROMPT_VERSION == 3

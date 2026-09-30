@@ -181,7 +181,7 @@ class LibraryPage(QWidget):
             if summary:
                 from .game_page import _heard_text
 
-                out.append("<h4>Heard by the listening model</h4><p>" + esc(_heard_text(summary)) + "</p>"
+                out.append("<h4>Heard by the listening model</h4><p>" + esc(_heard_text(summary)).replace("\n", "<br>") + "</p>"
                            "<p style='font-size:11px;color:gray'>From listening to "
                            f"{self.heard[t['id']].get('excerpts', 0)} ten-second excerpts of the audio.</p>")
         if f:

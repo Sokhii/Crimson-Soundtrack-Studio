@@ -190,3 +190,96 @@ def test_matching_compares_sound_when_both_sides_were_heard(listening_studio, tm
     assert stats["compared_by_sound"] >= 1 and stats["proposed"] >= 1
     track_emb, cue_emb = s.sound_embeddings(s.game_model())
     assert len(track_emb) == 2 and len(cue_emb) >= 1
+
+
+# ------------------------------------------------------------------ calibration (0-100 scores)
+def _cal_bank(dim=48):
+    from soundtrack_studio.listening.listen import PromptBank, all_prompts
+
+    rng = np.random.default_rng(5)
+    prompts = all_prompts()
+    vectors = rng.standard_normal((len(prompts), dim)).astype(np.float32)
+    return PromptBank({p: v / np.linalg.norm(v) for p, v in zip(prompts, vectors)})
+
+
+def _word_vec(bank, category, word):
+    from soundtrack_studio.listening.vocabulary import prompts_for
+
+    return np.mean([bank.vectors[p] for p in prompts_for(category, word)], axis=0)
+
+
+def _piece(bank, words, seed, noise=0.6):
+    """A fake audio embedding that leans towards the given (category, word) pairs."""
+
+    rng = np.random.default_rng(seed)
+    v = rng.standard_normal(48).astype(np.float32) * noise
+    for c, w in words:
+        u = _word_vec(bank, c, w)
+        v = v + 6.0 * u / np.linalg.norm(u)
+    return v / np.linalg.norm(v)
+
+
+def test_vocabulary_is_large_and_contains_the_profile_words():
+    from soundtrack_studio.listening.vocabulary import VOCABULARY, WORD_COUNT
+    from soundtrack_studio.semantic.profile import CATEGORIES
+
+    assert WORD_COUNT >= 300 and {"rhythm", "texture"} <= set(VOCABULARY)
+    for category, words in CATEGORIES.items():
+        assert set(words) <= set(VOCABULARY[category])
+        assert len(set(VOCABULARY[category])) == len(VOCABULARY[category])       # no duplicates in a group
+
+
+def test_scores_are_relative_to_the_music_analysed_and_hub_words_vanish():
+    from soundtrack_studio.listening.calibration import Calibration, TAG_MIN_SCORE
+
+    bank = _cal_bank()
+    hub = ("mood", "solemn")                      # a word every piece leans towards (like the real hub words)
+    pieces = [_piece(bank, [hub] + ([("instrumentation", "harp")] if i % 10 == 0 else []), seed=i) for i in range(60)]
+    cal = Calibration(bank, pieces)
+    assert cal.calibrated and cal.reference_size == 60
+    solemn_scores = [cal.tags(p).get("mood", {}).get("solemn") for p in pieces]
+    assert sum(s is not None for s in solemn_scores) <= 12          # shown for few pieces, not all 60 (hub neutralised)
+    harp = [cal.tags(p).get("instrumentation", {}).get("harp") for p in pieces[::10]]
+    assert all(h is not None and h >= TAG_MIN_SCORE for h in harp)   # the real standout is kept, with a number
+    summary = cal.summary({"embedding": pieces[0].tolist(), "excerpt_embeddings": [pieces[0].tolist()]})
+    assert summary["calibrated"] is True and summary["instrumentation"]["harp"] >= TAG_MIN_SCORE
+    assert isinstance(summary["vocals_score"], int) and 0 <= summary["vocals_score"] <= 100
+
+
+def test_fallback_when_too_little_music_to_compare_with():
+    from soundtrack_studio.listening.calibration import Calibration
+
+    bank = _cal_bank()
+    few = [_piece(bank, [("instrumentation", "harp")], seed=i) for i in range(5)]
+    cal = Calibration(bank, few)
+    assert not cal.calibrated
+    summary = cal.summary({"embedding": few[0].tolist()})
+    assert summary["calibrated"] is False and summary["reference_size"] == 5
+    assert Calibration(bank).summary({"embedding": few[0].tolist()})["calibrated"] is False
+
+
+def test_uninformative_words_are_skipped():
+    from soundtrack_studio.listening.calibration import Calibration
+
+    bank = _cal_bank()
+    pieces = [_piece(bank, [("mood", "dark")] if i % 3 == 0 else [], seed=i) for i in range(45)]
+    cal = Calibration(bank, pieces)
+    assert cal.useful.sum() <= len(cal.useful) and cal.useful.any()
+    # a word nobody varies on (forced constant) must be dropped
+    flat = Calibration(bank, [pieces[0]] * 40)
+    assert flat.calibrated and not flat.useful.all() or flat.std.max() < 1e-3
+
+
+def test_standout_similarity_rewards_shared_standouts():
+    from soundtrack_studio.listening.calibration import Calibration
+
+    bank = _cal_bank()
+    ref = [_piece(bank, [], seed=100 + i) for i in range(60)]
+    cal = Calibration(bank, ref)
+    cue = cal.standout_vector(_piece(bank, [("instrumentation", "harp"), ("mood", "peaceful"), ("atmosphere", "vast")], 1))
+    same = cal.standout_vector(_piece(bank, [("instrumentation", "harp"), ("mood", "peaceful")], 2))
+    other = cal.standout_vector(_piece(bank, [("instrumentation", "drum machine"), ("mood", "aggressive")], 3))
+    s_same, why = cal.standout_similarity(cue, same)
+    s_other, _ = cal.standout_similarity(cue, other)
+    assert s_same > s_other + 0.2 and any(w == "harp" for _c, w, _a, _b in why)
+    assert all(0 <= x <= 100 for _c, _w, a, b in why for x in (a, b))
