@@ -5,3 +5,6 @@ numpy>=1.26                  # BSD-3-Clause
 soundfile>=0.12              # BSD-3-Clause (bundles libsndfile, LGPL-2.1, as a shared library)
 cryptography>=42           # Apache-2.0 / BSD (ChaCha20 for reading original game archives)
 lz4>=4.3                   # BSD-3-Clause (LZ4 block decompression of game archive entries)
+onnxruntime>=1.20; sys_platform != "win32"            # MIT (optional listening model: CLAP)
+onnxruntime-directml>=1.20; sys_platform == "win32"   # MIT (DirectML: any DirectX 12 GPU, CPU fallback)
+tokenizers>=0.15           # Apache-2.0 (listening model text prompts)

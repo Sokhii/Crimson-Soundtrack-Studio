@@ -183,3 +183,48 @@ def test_build_page_builds_a_mod(app, window, tmp_path, monkeypatch):
     assert messages and messages[0][0] == "Mod built"
     assert (studio.paths.output / "GUI Mod" / "manifest.json").is_file()
     assert page.history.rowCount() == 1 and page.history.item(0, 1).text() == "completed"
+
+
+def test_listening_model_panel_and_game_audio_buttons(app, window, tmp_path, monkeypatch):
+    pytest.importorskip("onnxruntime")
+    pytest.importorskip("onnx")
+    from test_game_audio import _fake_decoder
+
+    from soundtrack_studio.testing.fake_listening import install_fake_listening_model
+    from soundtrack_studio.testing.fixtures import ANALYZER_FAKE_INSTALL_DB, extract_analyzer_fake_install
+
+    studio = window.studio
+    ai = window.pages["ai"]
+    ai.refresh()
+    assert ai.listen_card.isVisible() or not ai.isVisible()
+    assert "Not downloaded" in ai.listen_status.text() and not ai.listen_toggle.isEnabled()
+    install_fake_listening_model(studio)
+    ai.refresh()
+    assert ai.listen_toggle.isEnabled() and ai.listen_toggle.text() == "Turn on"
+    ai._listen_toggle()
+    assert studio.active_listening_model() is not None and ai.listen_toggle.text() == "Turn off"
+    monkeypatch.setattr(window, "info", lambda title, text: window.__dict__.setdefault("infos", []).append(text))
+    ai._listen_test()
+    wait(app, window)
+    assert not window.errors and "listened to test sounds correctly" in window.infos[-1]
+
+    game = extract_analyzer_fake_install(tmp_path / "Crimson Desert")
+    studio.import_analyzer(ANALYZER_FAKE_INSTALL_DB)
+    studio.set_game_path(game)
+    monkeypatch.setenv("CSS_VGMSTREAM", str(_fake_decoder(tmp_path)))
+    window.refresh(reload_game_data=True)
+    wait(app, window)
+    page = window.pages["game"]
+    page.set_model(studio.game_model())
+    assert page.audio_btn.isEnabled() and "0 of 4" in page.audio_status.text()
+    window.test_game_audio()
+    wait(app, window)
+    assert "Decoding works" in window.infos[-1]
+    window.analyze_game_audio()
+    wait(app, window)
+    page.set_model(studio.game_model())
+    assert "4 of 4" in page.audio_status.text() and "4 listened to" in page.audio_status.text()
+    page._current = ("node", studio.game_model().cues[0].segment_id)
+    page.show_current()
+    html = page.details.toHtml()
+    assert "Measured from the game audio" in html and "Heard by the listening model" in html

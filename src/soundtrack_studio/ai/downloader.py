@@ -112,8 +112,14 @@ def resolve_source(model: LocalModel) -> dict:
 def download_model(model: LocalModel, paths: AppPaths, progress: Progress = None, cancel: Cancel = None,
                    source: Optional[dict] = None) -> dict:
     source = source or resolve_source(model)
+    return download_file(source, model.install_path(paths), paths, progress, cancel)
+
+
+def download_file(source: dict, target: Path, paths: AppPaths, progress: Progress = None, cancel: Cancel = None,
+                  label: str = "Downloading model", magic: Optional[bytes] = b"GGUF") -> dict:
+    """Resumable download of ``source['url']`` to ``target``; verified against ``sha256``/``size`` when given."""
+
     url = source["url"]
-    target = model.install_path(paths)
     if not paths.is_inside(target):
         raise ModelError("Models must be stored inside the application's models folder.", details=str(target))
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -160,23 +166,25 @@ def download_model(model: LocalModel, paths: AppPaths, progress: Progress = None
                     now = time.monotonic()
                     if progress and now - last > 0.25:
                         last = now
-                        progress("Downloading model", done, total or 0)
+                        progress(label, done, total or 0)
     if progress:
-        progress("Verifying model", 0, 0)
-    result = verify_file(partial, expected, cancel)
+        progress(label.replace("Downloading", "Verifying"), 0, 0)
+    result = verify_file(partial, expected, cancel, magic)
     partial.replace(target)
     result.update({"path": str(target), "source_url": url, "repository": source.get("repository")})
     return result
 
 
-def verify_file(path: Path, expected: Optional[dict] = None, cancel: Cancel = None) -> dict:
+def verify_file(path: Path, expected: Optional[dict] = None, cancel: Cancel = None,
+                magic: Optional[bytes] = b"GGUF") -> dict:
     expected = expected or {}
     size = path.stat().st_size
-    with open(path, "rb") as handle:
-        magic = handle.read(4)
-    if magic != b"GGUF":
-        path.unlink(missing_ok=True)
-        raise ModelError("The downloaded file is not a GGUF model; it was removed.")
+    if magic is not None:
+        with open(path, "rb") as handle:
+            head = handle.read(len(magic))
+        if head != magic:
+            path.unlink(missing_ok=True)
+            raise ModelError("The downloaded file is not a GGUF model; it was removed.")
     if expected.get("size") and int(expected["size"]) != size:
         raise ModelError("The download is incomplete.", hint="Start the download again to resume it.",
                          details=f"expected {expected['size']} bytes, have {size}")

@@ -74,6 +74,10 @@ class Studio:
         self._cache: Optional[AnalysisCache] = None
         self._response_cache: Optional[ResponseCache] = None
         self._game_audio_cache: Optional[GameAudioCache] = None
+        self._listening_cache = None
+        self._clap = None
+        self._clap_key = ""
+        self._prompt_bank = None
         self._backend: Optional[InferenceBackend] = None
         self._hardware: Optional[hardware.HardwareInfo] = None
         self.registry = ModelRegistry(paths)
@@ -93,6 +97,10 @@ class Studio:
         if self._game_audio_cache is not None:
             self._game_audio_cache.close()
             self._game_audio_cache = None
+        self.release_listening_model()
+        if self._listening_cache is not None:
+            self._listening_cache.close()
+            self._listening_cache = None
         self.settings.save(self.paths)
 
     @property
@@ -257,7 +265,7 @@ class Studio:
     def library_tracks(self) -> List[Dict[str, Any]]:
         project = self.require_project()
         rows = project.query(
-            "SELECT t.id, t.rel_path, t.status, t.error, t.duplicate_of, t.size, r.path AS root, m.*, f.features_json"
+            "SELECT t.id, t.rel_path, t.status, t.error, t.duplicate_of, t.size, t.identity, r.path AS root, m.*, f.features_json"
             " FROM track t JOIN library_root r ON r.id=t.root_id LEFT JOIN track_metadata m ON m.track_id=t.id"
             " LEFT JOIN track_features f ON f.track_id=t.id ORDER BY r.path, t.rel_path")
         out = []
@@ -521,15 +529,208 @@ class Studio:
         return best.features or None, best.listening or None
 
     # ------------------------------------------------------------ listening
+    @property
+    def listening_cache(self):
+        from .listening.listen import ListeningCache
+
+        if self._listening_cache is None:
+            self._listening_cache = ListeningCache(self.paths.cache / "listening.sqlite3")
+        return self._listening_cache
+
+    def listening_models(self) -> List[Dict[str, Any]]:
+        from .listening.catalog import LISTENING_MODELS, listening_status
+
+        out = []
+        for m in LISTENING_MODELS:
+            status = listening_status(self.paths, m, self.registry.state(m.id))
+            out.append({"model": m, "active": self.settings.listening_model_id == m.id, **status})
+        return out
+
+    def download_listening_model(self, model_id: str, progress=None, cancel=None) -> Dict[str, Any]:
+        from .listening.catalog import get_listening_model, validate_small_file
+
+        model = get_listening_model(model_id)
+        if model is None:
+            raise ModelError(f"Unknown listening model: {model_id}")
+        folder = model.install_dir(self.paths)
+        results = {}
+        for i, f in enumerate(model.files, 1):
+            target = folder / f.path
+            if target.is_file() and self.registry.state(model.id).get("files", {}).get(f.path):
+                continue
+            label = f"Downloading listening model ({i}/{len(model.files)})"
+            source = {"url": model.url(f), "sha256": f.sha256, "size": f.size, "repository": model.repository}
+            results[f.path] = downloader.download_file(source, target, self.paths, progress, cancel, label, magic=None)
+            if f.sha256 is None:
+                try:
+                    validate_small_file(target, f.role)
+                except (OSError, ValueError) as exc:
+                    target.unlink(missing_ok=True)
+                    raise ModelError("A downloaded listening model file is not valid and was removed.",
+                                     hint="Try the download again.", details=f"{f.path}: {exc}") from exc
+            files = dict(self.registry.state(model.id).get("files", {}))
+            files[f.path] = results[f.path]["sha256"]
+            self.registry.update(model.id, files=files)
+        self.registry.update(model.id, verified=True, installed_at=now_iso())
+        return {"model": model.id, "downloaded": sorted(results)}
+
+    def delete_listening_model(self, model_id: str) -> None:
+        import shutil
+        from .listening.catalog import get_listening_model
+
+        model = get_listening_model(model_id)
+        if model is None:
+            return
+        if self.settings.listening_model_id == model_id:
+            self.select_listening_model("")
+        folder = model.install_dir(self.paths)
+        if folder.is_dir() and self.paths.is_inside(folder):
+            shutil.rmtree(folder)
+        self.registry.forget(model.id)
+
+    def select_listening_model(self, model_id: str) -> None:
+        self.release_listening_model()
+        self.settings.listening_model_id = model_id
+        self.settings.save(self.paths)
+
+    def active_listening_model(self):
+        from .listening.catalog import get_listening_model, listening_status
+
+        model = get_listening_model(self.settings.listening_model_id) if self.settings.listening_model_id else None
+        if model is None or not listening_status(self.paths, model, self.registry.state(model.id))["installed"]:
+            return None
+        return model
+
     def listening_key(self) -> str:
         """Cache key of the active listening model ("" = no listening model)."""
 
-        return ""
+        from .listening.listen import LISTEN_VERSION
+
+        model = self.active_listening_model()
+        return f"{model.id}@{model.revision[:12]}:v{LISTEN_VERSION}" if model else ""
+
+    def release_listening_model(self) -> None:
+        self._clap = None
+        self._clap_key = ""
+        self._prompt_bank = None
+
+    def _load_clap(self, progress=None):
+        from .listening.clap import load_model
+
+        model = self.active_listening_model()
+        if model is None:
+            return None
+        key = self.listening_key()
+        if self._clap is None or self._clap_key != key:
+            if progress:
+                progress("Loading the listening model", 0, 0)
+            self._clap = load_model(model.install_dir(self.paths), model.file_map(), self.settings.listening_device)
+            self._clap_key = key
+            self._prompt_bank = self.listening_cache.ensure_prompts(key, self._clap)
+        return self._clap
 
     def listening_callable(self, progress=None):
         """(listener, key) for the active listening model, or (None, "")."""
 
-        return None, ""
+        from .listening.listen import listen_file
+
+        clap = self._load_clap(progress)
+        if clap is None:
+            return None, ""
+        key = self._clap_key
+        return (lambda wav: listen_file(clap, wav, key)), key
+
+    def test_listening_model(self, model_id: str) -> Dict[str, Any]:
+        """Load the model, listen to generated test audio and check the results are sane."""
+
+        import time
+
+        import numpy as np
+
+        from .listening.catalog import get_listening_model
+        from .listening.clap import load_model, version_info
+
+        model = get_listening_model(model_id)
+        if model is None:
+            raise ModelError(f"Unknown listening model: {model_id}")
+        started = time.monotonic()
+        clap = load_model(model.install_dir(self.paths), model.file_map(), self.settings.listening_device)
+        t = np.arange(48000 * 10) / 48000
+        tone = (0.3 * np.sin(2 * np.pi * 440 * t)).astype(np.float32)
+        noise = (0.1 * np.random.default_rng(0).standard_normal(len(t))).astype(np.float32)
+        emb = clap.embed_audio([tone, noise])
+        text = clap.embed_text(["a sine tone", "white noise"])
+        sims = emb @ text.T
+        ok = bool(np.all(np.isfinite(emb)) and emb.shape[0] == 2 and emb.shape[1] == text.shape[1])
+        result = {"ok": ok, "provider": clap.provider, "seconds": round(time.monotonic() - started, 1),
+                  "dimension": int(emb.shape[1]), "tone_prefers_tone_prompt": bool(sims[0, 0] > sims[0, 1]),
+                  "noise_prefers_noise_prompt": bool(sims[1, 1] > sims[1, 0]), **version_info()}
+        self.registry.update(model_id, last_test=result)
+        (self.paths.logs / "listening_check.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
+        return result
+
+    def listen_to_library(self, progress=None, cancel=None) -> Dict[str, int]:
+        from .errors import OperationCancelled, StudioError
+        from .listening.listen import listen_file
+
+        listener, key = self.listening_callable(progress)
+        if listener is None:
+            return {"tracks": 0, "listened": 0, "cached": 0, "errors": 0}
+        tracks = [t for t in self.library_tracks() if t["status"] == "ok" and not t.get("duplicate_of")]
+        stats = {"tracks": len(tracks), "listened": 0, "cached": 0, "errors": 0}
+        errors = []
+        for i, t in enumerate(tracks):
+            if cancel and cancel():
+                raise OperationCancelled()
+            if progress:
+                progress("Listening to your music", i, len(tracks))
+            identity = t.get("identity") or f"{t['root']}/{t['rel_path']}:{t.get('size')}"
+            if self.listening_cache.get_track(identity, key):
+                stats["cached"] += 1
+                continue
+            try:
+                result = listen_file(self._clap, Path(t["root"]) / t["rel_path"], key)
+                self.listening_cache.put_track(identity, key, result)
+                stats["listened"] += 1
+            except StudioError as exc:
+                stats["errors"] += 1
+                errors.append(f"{t['rel_path']}: {exc.message} {exc.details}".strip())
+        if progress:
+            progress("Listening to your music", len(tracks), len(tracks))
+        if errors:
+            self.require_project().add_event("warning", "listening", f"{len(errors)} tracks could not be listened to.",
+                                             "\n".join(errors[:20]))
+        return stats
+
+    def track_listening(self) -> Dict[int, Dict[str, Any]]:
+        key = self.listening_key()
+        if not key:
+            return {}
+        out = {}
+        for t in self.library_tracks():
+            identity = t.get("identity") or f"{t['root']}/{t['rel_path']}:{t.get('size')}"
+            result = self.listening_cache.get_track(identity, key)
+            if result:
+                out[t["id"]] = result
+        return out
+
+    def heard_summary(self, listening: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        """What the listening model heard (vocabulary tags, vocals), or None."""
+
+        if not listening or not listening.get("embedding"):
+            return None
+        key = listening.get("model") or self.listening_key()
+        bank = self._prompt_bank if (self._prompt_bank is not None and key == self._clap_key) else None
+        if bank is None:
+            bank = self.listening_cache.prompt_bank(key)
+            if not bank.complete():
+                try:
+                    if key == self.listening_key() and self._load_clap() is not None:
+                        bank = self._prompt_bank
+                except Exception as exc:  # noqa: BLE001 - summaries are optional
+                    log.warning("Listening prompts unavailable: %s", exc)
+                    return None
+        return bank.summary(listening) if bank is not None else None
 
     # ------------------------------------------------------------ semantics
     def semantic_store(self) -> SemanticStore:
@@ -537,8 +738,9 @@ class Studio:
 
     def semantic_items(self, entity_type: str, include_short_cues: bool = False) -> List[tuple]:
         if entity_type == "track":
-            return [(str(t["id"]), track_document(t)) for t in self.library_tracks()
-                    if t["status"] == "ok" and not t.get("duplicate_of")]
+            heard = self.track_listening()
+            return [(str(t["id"]), track_document(t, self.heard_summary(heard.get(t["id"]))))
+                    for t in self.library_tracks() if t["status"] == "ok" and not t.get("duplicate_of")]
         model = self.game_model()
         if model is None:
             return []
@@ -550,8 +752,6 @@ class Studio:
                 items.append((str(c.segment_id), cue_document(model, c, measured, self.heard_summary(heard))))
         return items
 
-    def heard_summary(self, listening: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-        return None
 
     @staticmethod
     def is_short_cue(cue) -> bool:
@@ -574,6 +774,8 @@ class Studio:
             except (GameInstallError, AnalyzerDbError) as exc:
                 self.require_project().add_event("warning", "game_audio", f"The game's music was not analysed: {exc.message}",
                                                  getattr(exc, "details", ""))
+        if self.active_listening_model() is not None:
+            self.listen_to_library(progress, cancel)
         tracks = self.semantic_items("track")
         results["track"] = store.run("track", tracks, backend, model_key, progress, cancel)
         store.forget_missing("track", [k for k, _d in tracks])

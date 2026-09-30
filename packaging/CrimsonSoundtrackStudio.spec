@@ -17,7 +17,8 @@ a = Analysis(
            (str(ROOT / "src" / "soundtrack_studio" / "testing" / "analyzer_fakeinstall.zip"), "soundtrack_studio/testing"),
            (str(ROOT / "src" / "soundtrack_studio" / "testing" / "analyzer_fakeinstall_v1.sqlite3"), "soundtrack_studio/testing"),
            (str(ROOT / "LICENSE"), "."), (str(ROOT / "THIRD_PARTY_NOTICES.md"), ".")],
-    hiddenimports=["soundfile", "_soundfile", "_soundfile_data", "lz4.block", "cryptography"],
+    hiddenimports=["soundfile", "_soundfile", "_soundfile_data", "lz4.block", "cryptography", "onnxruntime",
+                   "tokenizers"],
     excludes=["tkinter", "matplotlib", "PySide6.QtWebEngineCore", "PySide6.QtQml", "PySide6.QtQuick", "PySide6.Qt3DCore"],
     noarchive=False,
 )

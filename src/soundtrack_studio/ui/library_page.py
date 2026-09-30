@@ -125,6 +125,7 @@ class LibraryPage(QWidget):
         split.addWidget(side)
         split.setSizes([760, 380])
         self.profiles = {}
+        self.heard = {}
         self.current_track = None
         layout.addWidget(split, 1)
 
@@ -140,6 +141,10 @@ class LibraryPage(QWidget):
         self.scan_btn.setEnabled(bool(path))
         rows = studio.library_tracks()
         self.profiles = studio.profiles("track")
+        try:
+            self.heard = studio.track_listening()
+        except Exception:  # noqa: BLE001 - optional information
+            self.heard = {}
         self.model.set_rows(rows)
         self.table.resizeColumnsToContents()
         counts = studio.library_counts()
@@ -172,6 +177,13 @@ class LibraryPage(QWidget):
         out.append("</table>")
         if t["status"] == "ok":
             out.append(profile_html(self.profiles.get(str(t["id"]))))
+            summary = self.host.studio.heard_summary(self.heard.get(t["id"])) if self.heard.get(t["id"]) else None
+            if summary:
+                from .game_page import _heard_text
+
+                out.append("<h4>Heard by the listening model</h4><p>" + esc(_heard_text(summary)) + "</p>"
+                           "<p style='font-size:11px;color:gray'>From listening to "
+                           f"{self.heard[t['id']].get('excerpts', 0)} ten-second excerpts of the audio.</p>")
         if f:
             rows = [
                 ("Tempo", f"{f['tempo_bpm']:g} BPM (confidence {f.get('tempo_confidence', 0):.2f})" if f.get("tempo_bpm")
@@ -199,7 +211,7 @@ class LibraryPage(QWidget):
             if f.get("notes"):
                 out.append("<p style='font-size:11px;color:gray'>" + "<br>".join(esc(n) for n in f["notes"]) + "</p>")
             out.append("<p style='font-size:11px;color:gray'>These are measured facts from the audio signal. "
-                       "'Estimate' and 'heuristic' values are approximate. Musical key and vocals are not guessed.</p>")
+                       "'Estimate' and 'heuristic' values are approximate. Musical key is not guessed; vocals are only judged by the optional listening model.</p>")
         self.details.setHtml("".join(out))
 
 

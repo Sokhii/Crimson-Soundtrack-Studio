@@ -90,6 +90,21 @@ jobs:
           Pop-Location
           Get-Content (Join-Path $e "logs\ai_check.json")
           if ($p.ExitCode -ne 0) { throw "AI runtime check failed" }
+      - uses: actions/cache@v4
+        with:
+          path: clap-home/models
+          key: clap-win-${{ hashFiles('src/soundtrack_studio/listening/catalog.py') }}
+      - name: Frozen EXE runs the optional listening model (ONNX Runtime + DirectML, CPU fallback)
+        shell: pwsh
+        run: |
+          python tools/fetch_listening_model.py --home clap-home
+          $e = Join-Path $env:RUNNER_TEMP "E\Tools\Crimson Soundtrack Studio"
+          $home_ = Resolve-Path clap-home
+          Push-Location $env:RUNNER_TEMP
+          $p = Start-Process -FilePath (Join-Path $e "CrimsonSoundtrackStudio.exe") -ArgumentList "--listen-check","`"$home_`"" -Wait -PassThru
+          Pop-Location
+          Get-Content (Join-Path $e "logs\listen_check.json")
+          if ($p.ExitCode -ne 0) { throw "listening model check failed" }
       - name: Package portable ZIP
         run: python tools/build_portable.py
       - uses: actions/upload-artifact@v4

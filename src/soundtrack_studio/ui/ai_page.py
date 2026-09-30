@@ -5,8 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (QButtonGroup, QHBoxLayout, QHeaderView, QLabel, QPushButton, QRadioButton, QTableWidget,
-                               QTableWidgetItem, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QButtonGroup, QComboBox, QHBoxLayout, QHeaderView, QLabel, QPushButton, QRadioButton,
+                               QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
 from ..ai.hardware import recommend_tier
 from .widgets import Card, esc
@@ -102,6 +102,43 @@ class AIPage(QWidget):
         layout.addLayout(buttons)
         self.rows = []
 
+        # ------------------------------------------------ optional listening model, beside the description models
+        self.listen_card = Card("Listening model (optional)")
+        self.listen_intro = QLabel(
+            "The description models above read tags, names and measurements; they cannot hear the music. A listening "
+            "model <b>listens to the audio itself</b> - your tracks and the game's music - and recognises instruments, "
+            "vocals, mood and style, and how much two pieces sound alike. Its findings are given to the description "
+            "model (or the rule-based descriptions) and to matching. It works alongside them and replaces nothing.")
+        self.listen_intro.setWordWrap(True)
+        self.listen_intro.setTextFormat(Qt.TextFormat.RichText)
+        self.listen_card.body.addWidget(self.listen_intro)
+        self.listen_status = QLabel()
+        self.listen_status.setWordWrap(True)
+        self.listen_status.setTextFormat(Qt.TextFormat.RichText)
+        self.listen_card.body.addWidget(self.listen_status)
+        lrow = QHBoxLayout()
+        self.listen_download = QPushButton("Download")
+        self.listen_download.clicked.connect(self._listen_download)
+        self.listen_toggle = QPushButton("Turn on")
+        self.listen_toggle.clicked.connect(self._listen_toggle)
+        self.listen_test = QPushButton("Test")
+        self.listen_test.clicked.connect(self._listen_test)
+        self.listen_delete = QPushButton("Delete")
+        self.listen_delete.clicked.connect(self._listen_delete)
+        self.listen_device = QComboBox()
+        self.listen_device.addItem("Graphics card when available", "auto")
+        self.listen_device.addItem("CPU only", "cpu")
+        self.listen_device.setToolTip("Where the listening model runs. The graphics card (DirectX 12: AMD, NVIDIA, "
+                                      "Intel) is much faster; the CPU always works.")
+        self.listen_device.currentIndexChanged.connect(self._listen_device_changed)
+        for b in (self.listen_download, self.listen_toggle, self.listen_test, self.listen_delete):
+            lrow.addWidget(b)
+        lrow.addStretch(1)
+        lrow.addWidget(QLabel("Runs on:"))
+        lrow.addWidget(self.listen_device)
+        self.listen_card.body.addLayout(lrow)
+        layout.addWidget(self.listen_card)
+
     # ---------------------------------------------------------------- data
     def refresh(self) -> None:
         studio = self.host.studio
@@ -127,6 +164,89 @@ class AIPage(QWidget):
             self.active_label.setText("None: rule-based descriptions from tags, names and measurements.")
         self.describe_btn.setEnabled(studio.project is not None)
         self.fill_table()
+        self.fill_listening()
+
+    def _listening_entry(self):
+        entries = self.host.studio.listening_models()
+        return entries[0] if entries else None
+
+    def fill_listening(self) -> None:
+        e = self._listening_entry()
+        if e is None:
+            self.listen_card.setVisible(False)
+            return
+        m = e["model"]
+        if e["installed"]:
+            state = "<b>On</b>: used when describing music." if e["active"] else "Downloaded, currently <b>off</b>."
+            test = e.get("last_test") or {}
+            if test:
+                state += f" Last test: {'OK' if test.get('ok') else 'failed'} on {esc(str(test.get('provider', '')))}."
+        elif e["partial"]:
+            state = "Partly downloaded (resume)."
+        else:
+            state = f"Not downloaded (about {m.approximate_size_mb} MB)."
+        self.listen_status.setText(f"<b>{esc(m.display_name)}</b> · licence {esc(m.license)} · {state}")
+        self.listen_download.setVisible(not e["installed"])
+        self.listen_download.setText("Resume download" if e["partial"] else "Download")
+        self.listen_toggle.setEnabled(e["installed"])
+        self.listen_toggle.setText("Turn off" if e["active"] else "Turn on")
+        self.listen_test.setEnabled(e["installed"])
+        self.listen_delete.setEnabled(e["installed"] or e["partial"])
+        device = self.host.studio.settings.listening_device
+        self.listen_device.blockSignals(True)
+        self.listen_device.setCurrentIndex(max(0, self.listen_device.findData(device)))
+        self.listen_device.blockSignals(False)
+
+    def _listen_download(self) -> None:
+        e = self._listening_entry()
+        if e is None:
+            return
+        m = e["model"]
+        text = (f"Download {m.display_name} (about {m.approximate_size_mb} MB) from Hugging Face into the program's "
+                f"models folder?\n\nLicence: {m.license}\n{m.license_url}")
+        if not self.host.confirm("Download listening model", text):
+            return
+        self.host.run_job(f"Downloading {m.display_name}",
+                          lambda report, cancelled: self.host.studio.download_listening_model(m.id, report, cancelled),
+                          on_done=lambda _r: self.refresh(), on_fail=lambda: self.refresh())
+
+    def _listen_toggle(self) -> None:
+        e = self._listening_entry()
+        if e is None:
+            return
+        self.host.studio.select_listening_model("" if e["active"] else e["model"].id)
+        self.refresh()
+        self.host.refresh()
+
+    def _listen_test(self) -> None:
+        e = self._listening_entry()
+        if e is None:
+            return
+
+        def done(result) -> None:
+            self.refresh()
+            self.host.info("Listening model test",
+                           ("The listening model loaded and listened to test sounds correctly." if result["ok"] else
+                            "The listening model loaded, but its output was not usable.")
+                           + f"\n\nRuns on: {result['provider']}\nTime: {result['seconds']} s")
+
+        self.host.run_job("Loading and testing the listening model",
+                          lambda report, cancelled: (report("Loading the listening model", 0, 0),
+                                                     self.host.studio.test_listening_model(e["model"].id))[1],
+                          on_done=done, on_fail=lambda: self.refresh())
+
+    def _listen_delete(self) -> None:
+        e = self._listening_entry()
+        if e and self.host.confirm("Delete listening model", f"Delete {e['model'].display_name} from the models "
+                                   "folder? What it heard so far stays cached; you can download it again later."):
+            self.host.studio.delete_listening_model(e["model"].id)
+            self.refresh()
+            self.host.refresh()
+
+    def _listen_device_changed(self) -> None:
+        self.host.studio.settings.listening_device = self.listen_device.currentData()
+        self.host.studio.release_listening_model()
+        self.host.studio.settings.save(self.host.studio.paths)
 
     def _tier(self) -> str:
         button = self.tier_group.checkedButton()

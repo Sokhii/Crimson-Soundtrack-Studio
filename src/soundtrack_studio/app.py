@@ -6,6 +6,7 @@
     CrimsonSoundtrackStudio.exe --print-paths         show the portable directory layout
     CrimsonSoundtrackStudio.exe --print-state         settings/projects/models/caches/logs seen by this copy
     CrimsonSoundtrackStudio.exe --ai-check MODEL.gguf start the bundled AI runtime with a model and test it
+    CrimsonSoundtrackStudio.exe --listen-check HOME   load the listening model found in HOME/models/listening and test it
     CrimsonSoundtrackStudio.exe --smoke-gui           open the main window briefly and exit (CI)
 """
 
@@ -59,6 +60,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--print-paths", action="store_true")
     parser.add_argument("--print-state", action="store_true")
     parser.add_argument("--ai-check", metavar="GGUF", help="load a GGUF model with the bundled runtime and test it")
+    parser.add_argument("--listen-check", metavar="HOME", help="test the listening model installed under HOME (CI)")
     parser.add_argument("--smoke-gui", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
 
@@ -75,7 +77,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     from .logging_setup import setup_logging, shutdown_logging
 
     settings = Settings.load(paths)
-    cli = args.selftest or args.portability_check or args.print_paths or args.print_state or args.ai_check
+    cli = (args.selftest or args.portability_check or args.print_paths or args.print_state or args.ai_check
+           or args.listen_check)
     setup_logging(paths, settings.log_level, console=cli and sys.stderr is not None)
     try:
         if args.print_paths:
@@ -99,6 +102,12 @@ def main(argv: Optional[List[str]] = None) -> int:
             (paths.logs / "ai_check.json").write_text(text, encoding="utf-8")
             _print(text)
             return 0 if result["ok"] else 1
+        if args.listen_check:
+            result = _listen_check(paths, settings, args.listen_check)
+            text = json.dumps(result, indent=2, ensure_ascii=False)
+            (paths.logs / "listen_check.json").write_text(text, encoding="utf-8")
+            _print(text)
+            return 0 if result.get("ok") else 1
         if args.portability_check:
             from .portability import run_portability_check
 
@@ -110,6 +119,40 @@ def main(argv: Optional[List[str]] = None) -> int:
         return run_gui(paths, settings, smoke=args.smoke_gui)
     finally:
         shutdown_logging()
+
+
+def _listen_check(paths: AppPaths, settings, home: str) -> dict:
+    """Load the listening model from another portable root's models folder with the bundled ONNX Runtime."""
+
+    from pathlib import Path
+
+    from .listening.catalog import CLAP_MUSIC_SPEECH
+    from .services import Studio
+
+    source = AppPaths(Path(home))
+    studio = Studio(paths, settings)
+    try:
+        model_dir = CLAP_MUSIC_SPEECH.install_dir(source)
+        if not model_dir.is_dir():
+            return {"ok": False, "error": f"no listening model in {model_dir}"}
+        import time
+
+        import numpy as np
+
+        from .listening.clap import load_model, version_info
+        from .listening.listen import PromptBank, all_prompts
+
+        started = time.monotonic()
+        clap = load_model(model_dir, CLAP_MUSIC_SPEECH.file_map(), settings.listening_device)
+        t = np.arange(480000) / 48000
+        emb = clap.embed_audio([(0.3 * np.sin(2 * np.pi * 440 * t)).astype(np.float32)])
+        prompts = all_prompts()
+        bank = PromptBank(dict(zip(prompts, clap.embed_text(prompts))))
+        summary = bank.summary({"embedding": emb[0].tolist()})
+        return {"ok": bool(np.all(np.isfinite(emb)) and summary is not None), "provider": clap.provider,
+                "seconds": round(time.monotonic() - started, 1), "summary_of_a_sine_tone": summary, **version_info()}
+    finally:
+        studio.shutdown()
 
 
 def _ai_check(paths: AppPaths, settings, model_file: str) -> dict:
