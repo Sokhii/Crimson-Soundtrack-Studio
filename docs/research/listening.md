@@ -29,18 +29,18 @@ Design: read through the Analyzer's archive records (ChaCha20/LZ4 as in the comp
 | Fact | Evidence | Trust |
 |---|---|---|
 | LAION's CLAP checkpoints `larger_clap_music` and `larger_clap_music_and_speech` are Apache-2.0. | Hugging Face model metadata (read in CI) | verified |
-| Only `larger_clap_music_and_speech` has a ready ONNX export (`Xenova/…`, revision `e9fd5ac`): audio tower 282 MB (fp32), text tower 127 MB (int8). | Hugging Face listing (read in CI) | verified |
+| Only `larger_clap_music_and_speech` has a ready ONNX export (`Xenova/…`, revision `e9fd5ac`): audio tower 282 MB (fp32), text tower 251 MB (fp16; the 127 MB int8 variant was rejected, see below). | Hugging Face listing (read in CI) | verified |
 | Preprocessing: 48 kHz, 64 Slaney mel bands 50-14000 Hz, 1024-point FFT, hop 480, 10 s input, `rand_trunc` + `repeatpad`. | model `preprocessor_config.json` | verified |
 | Our NumPy front end equals transformers' `ClapFeatureExtractor`: max difference 7.6e-6 dB. | `listening-reference` CI job | verified |
 | Our tokenizer (tokenizers + `tokenizer.json`) produces the same ids as transformers' `RobertaTokenizer`. | `listening-reference` CI job | verified |
-| ONNX audio/text embeddings match the PyTorch model (cosine thresholds 0.999 / 0.97 for the int8 text tower). | `listening-reference` CI job | see CI |
+| ONNX audio embeddings match PyTorch (cosine 1.00000). The int8 text tower did not (batched min cosine 0.57, one prompt at a time min 0.92 / mean 0.98); the fp32 and fp16 towers match exactly (1.0000), so the fp16 one is used. | `listening-reference` CI job | verified |
 | llama.cpp can run audio-input models (Ultravox, Voxtral, Qwen2.5/3-Omni, Gemma 4), but those are large or speech-oriented; the user preferred a small music-specific model. | llama.cpp `docs/multimodal.md` | source-confirmed |
 | Essentia's voice/instrumental classifier is accurate but CC BY-NC-SA (non-commercial). | Essentia model documentation | community-reported; not used |
 
 Vocals: mean cosine to three "sung vocals" prompts minus three "instrumental" prompts; > 0.02 = sung vocals,
 < -0.01 = instrumental, otherwise unclear. On public-domain recordings from Wikimedia Commons (CI diagnostics,
-2026-09-30): five of six vocal recordings scored 0.056-0.163 (sung vocals), one -0.002 (unclear); six instrumental
-pieces scored -0.163 to -0.380 (instrumental). Only embeddings are stored, so thresholds and prompts can be re-tuned
+2026-09-30, int8 text tower, one prompt at a time): all six vocal recordings scored 0.059-0.182 (sung vocals); the instrumental
+pieces scored -0.125 to -0.380 (instrumental). Only embeddings are stored, so thresholds and prompts can be re-tuned
 without listening again.
 
 Why embeddings plus zero-shot tags instead of free text: the profile vocabulary is fixed, CLAP scores exactly those

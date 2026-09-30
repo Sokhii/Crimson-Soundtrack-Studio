@@ -56,8 +56,9 @@ CLAP_MUSIC_SPEECH = ListeningModel(
     files=(
         ModelFile("audio", "onnx/audio_model.onnx",
                   "3ecc72d27740e2a09ced20cf22fd6244122e5e506008763a0f368b3b4ff6eac8", 281749092),
-        ModelFile("text", "onnx/text_model_quantized.onnx",
-                  "8f9f29c5f6adee917553d4b3a70729c731c0d18b88efca0ae67c1a1fc278f3b6", 126603262),
+        # fp16 text tower: identical to PyTorch in CI (cosine 1.0000); the int8 one averaged only 0.978
+        ModelFile("text", "onnx/text_model_fp16.onnx",
+                  "79da753839b7fd22afc3fa2076cb75ffb5729c24b3249042cf3ec6a4e2c924b3", 251029088),
         ModelFile("tokenizer", "tokenizer.json", None, 2108774),
         ModelFile("preprocessor", "preprocessor_config.json", None, 541),
         ModelFile("config", "config.json", None, 596),
@@ -65,7 +66,7 @@ CLAP_MUSIC_SPEECH = ListeningModel(
     license="Apache-2.0",
     license_url="https://huggingface.co/laion/larger_clap_music_and_speech",
     upstream="https://github.com/LAION-AI/CLAP",
-    approximate_size_mb=410,
+    approximate_size_mb=535,
 )
 
 LISTENING_MODELS: List[ListeningModel] = [CLAP_MUSIC_SPEECH]

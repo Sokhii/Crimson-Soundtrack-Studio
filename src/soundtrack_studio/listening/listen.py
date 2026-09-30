@@ -50,7 +50,7 @@ INSTRUMENTAL_PROMPTS = ("instrumental music without vocals", "an instrumental pi
 VOCAL_MARGIN = 0.02
 INSTRUMENTAL_MARGIN = -0.01
 STRONG_Z, MODERATE_Z, MAX_PER_FIELD = 1.6, 1.0, 3
-PROMPT_EMBED_VERSION = 2   # 2: prompts embedded one at a time (batched padding distorted them)
+PROMPT_EMBED_VERSION = 3   # 3: fp16 text tower (identical to PyTorch); 2: int8 tower one prompt at a time
 
 
 def all_prompts() -> List[str]:

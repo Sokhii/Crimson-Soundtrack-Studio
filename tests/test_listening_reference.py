@@ -103,7 +103,7 @@ def test_text_embeddings_and_tokens_match(ours, reference):
     ref = ref / np.linalg.norm(ref, axis=1, keepdims=True)
     cos = np.sum(mine * ref, axis=1)
     print(f"text embeddings (as used by the app vs PyTorch): min cosine {cos.min():.4f}, mean {cos.mean():.4f}")
-    assert cos.min() > 0.9 and cos.mean() > 0.97
+    assert cos.min() > 0.999
 
 
 def test_public_domain_recordings_report(ours, tmp_path):
