@@ -14,7 +14,7 @@ def states(status):
 def test_phase1_workflow(tmp_path, studio, game, analyzer_db):
     root, _files = game
     s = studio.project_status()
-    assert states(s)[1] == "missing" and states(s)[2] == "missing" and states(s)[4] == "unavailable"
+    assert states(s)[1] == "missing" and states(s)[2] == "missing" and states(s)[4] == "warning"  # AI optional
 
     assert studio.set_game_path(root).status == compat.UNVERIFIABLE
     game_before = fingerprint(root)
@@ -31,7 +31,11 @@ def test_phase1_workflow(tmp_path, studio, game, analyzer_db):
     stats = studio.scan_library()
     assert stats.analyzed == 1
     s = studio.project_status()
-    assert [states(s)[i] for i in (1, 2, 3, 5)] == ["ok"] * 4
+    assert [states(s)[i] for i in (1, 2, 3)] == ["ok"] * 3
+    assert states(s)[5] == "warning"  # scanned but not described yet
+    studio.analyze_semantics(use_ai=False)
+    s = studio.project_status()
+    assert states(s)[5] == "ok"
     assert all(states(s)[i] == "unavailable" for i in range(6, 11))
     assert not s.warnings
     assert fingerprint(root) == game_before and fingerprint(analyzer_db.parent) == db_before

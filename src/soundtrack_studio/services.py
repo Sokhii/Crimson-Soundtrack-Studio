@@ -15,6 +15,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+from .ai import downloader, hardware
+from .ai.catalog import LocalModel, ModelCatalog, ModelError, ModelRegistry, model_status, register_custom_model
+from .ai.runtime import InferenceBackend, LlamaServerBackend, find_llama_server, run_inference_check
 from .analyzer_db import compat
 from .analyzer_db.importer import ImportedDatabase, import_database, load_imported, source_changed
 from .analyzer_db.reader import AnalyzerReader
@@ -25,11 +28,14 @@ from .game_model.builder import load_or_build
 from .game_model.model import GameMusicModel
 from .library.cache import AnalysisCache
 from .library.scanner import LibraryScanner, ScanProgress, ScanStats
-from .project.store import Project, ProjectInfo, list_projects
+from .project.store import Project, ProjectInfo, list_projects, now_iso
+from .semantic.context import cue_document, track_document
+from .semantic.store import EffectiveProfile, ResponseCache, RunStats, SemanticStore
 
 log = logging.getLogger(__name__)
 
 OK, WARN, MISSING, UNAVAILABLE = "ok", "warning", "missing", "unavailable"
+SHORT_CUE_MS = 15000  # transition-length segments are kept original by default
 
 
 @dataclass
@@ -60,13 +66,23 @@ class Studio:
         self.project: Optional[Project] = None
         self._model: Optional[GameMusicModel] = None
         self._cache: Optional[AnalysisCache] = None
+        self._response_cache: Optional[ResponseCache] = None
+        self._backend: Optional[InferenceBackend] = None
+        self._hardware: Optional[hardware.HardwareInfo] = None
+        self.registry = ModelRegistry(paths)
+        # tests replace this to inject a scripted model
+        self.backend_factory: Callable[[LocalModel], InferenceBackend] = self._make_llama_backend
 
     # ------------------------------------------------------------ lifecycle
     def shutdown(self) -> None:
+        self.stop_ai()
         self.close_project()
         if self._cache is not None:
             self._cache.close()
             self._cache = None
+        if self._response_cache is not None:
+            self._response_cache.close()
+            self._response_cache = None
         self.settings.save(self.paths)
 
     @property
@@ -74,6 +90,12 @@ class Studio:
         if self._cache is None:
             self._cache = AnalysisCache(self.paths.cache / "audio_analysis.sqlite3")
         return self._cache
+
+    @property
+    def response_cache(self) -> ResponseCache:
+        if self._response_cache is None:
+            self._response_cache = ResponseCache(self.paths.cache / "ai_responses.sqlite3")
+        return self._response_cache
 
     # ------------------------------------------------------------- projects
     def list_projects(self) -> List[ProjectInfo]:
@@ -239,6 +261,179 @@ class Studio:
         counts["total"] = sum(v for k, v in counts.items() if k in ("ok", "error", "missing"))
         return counts
 
+    # ------------------------------------------------------------------- AI
+    def catalog(self) -> ModelCatalog:
+        return ModelCatalog.load(self.paths, self.registry)
+
+    def hardware(self) -> hardware.HardwareInfo:
+        if self._hardware is None:
+            self._hardware = hardware.detect()
+        return self._hardware
+
+    def runtime_path(self) -> Optional[Path]:
+        return find_llama_server(self.paths, self.settings.llama_server_path)
+
+    def model_rows(self) -> List[Dict[str, Any]]:
+        info = self.hardware()
+        rows = []
+        for model in self.catalog().models.values():
+            status = model_status(self.paths, self.registry, model)
+            status.update({"model": model, "fits": hardware.fits(info, model.approximate_size_gb, model.recommended_vram_gb),
+                           "selected": model.id == self.settings.ai_model_id})
+            rows.append(status)
+        order = {"low": 0, "medium": 1, "high": 2, "custom": 3}
+        rows.sort(key=lambda r: (order.get(r["model"].tier, 9), r["model"].approximate_size_gb))
+        return rows
+
+    def _catalog_model(self, model_id: str) -> LocalModel:
+        model = self.catalog().get(model_id)
+        if model is None:
+            raise ModelError("This model is not in the catalog.", details=model_id)
+        return model
+
+    def download_model(self, model_id: str, progress=None, cancel=None) -> Dict[str, Any]:
+        model = self._catalog_model(model_id)
+        self.registry.update(model.id, status="downloading")
+        try:
+            result = downloader.download_model(model, self.paths, progress, cancel)
+        except BaseException:
+            present = model.install_path(self.paths).is_file()
+            self.registry.update(model.id, status="available" if present else "not_downloaded")
+            raise
+        self.registry.update(model.id, status="verified", sha256=result["sha256"], size=result["size"],
+                             verified_at=now_iso(), hash_checked_against_source=result["hash_checked_against_source"],
+                             source_url=result.get("source_url"), repository=result.get("repository"))
+        log.info("Model %s downloaded and verified (source hash checked: %s)", model.id,
+                 result["hash_checked_against_source"])
+        return result
+
+    def verify_model(self, model_id: str, cancel=None) -> Dict[str, Any]:
+        model = self._catalog_model(model_id)
+        path = model.install_path(self.paths)
+        if not path.is_file():
+            raise ModelError("The model file is missing.", hint="Download it again.", details=str(path))
+        expected = {}
+        known = self.registry.state(model.id).get("sha256")
+        if known:
+            expected["sha256"] = known
+        result = downloader.verify_file(path, expected, cancel)
+        self.registry.update(model.id, status="verified", sha256=result["sha256"], size=result["size"], verified_at=now_iso())
+        return result
+
+    def delete_model(self, model_id: str) -> None:
+        model = self._catalog_model(model_id)
+        if self.settings.ai_model_id == model.id:
+            self.stop_ai()
+        path = model.install_path(self.paths)
+        if model.tier == "custom":
+            self.registry.forget(model.id)  # the user's own file is never deleted
+        else:
+            for candidate in (path, path.with_name(path.name + ".part")):
+                if self.paths.is_inside(candidate) and candidate.is_file():
+                    candidate.unlink()
+            self.registry.update(model.id, status="not_downloaded", sha256=None, verified_at=None, inference_ok=None)
+        if self.settings.ai_model_id == model.id:
+            self.settings.ai_model_id = ""
+            self.settings.save(self.paths)
+
+    def add_custom_model(self, path: Path) -> LocalModel:
+        return register_custom_model(self.paths, self.registry, Path(path))
+
+    def select_model(self, model_id: str) -> None:
+        if model_id:
+            self._catalog_model(model_id)
+        if model_id != self.settings.ai_model_id:
+            self.stop_ai()
+        self.settings.ai_model_id = model_id
+        self.settings.save(self.paths)
+
+    def active_model(self) -> Optional[LocalModel]:
+        if not self.settings.ai_model_id:
+            return None
+        model = self.catalog().get(self.settings.ai_model_id)
+        return model if model and model.install_path(self.paths).is_file() else None
+
+    def _make_llama_backend(self, model: LocalModel) -> InferenceBackend:
+        return LlamaServerBackend(self.paths, model, server_path=self.runtime_path(),
+                                  gpu_layers=self.settings.ai_gpu_layers, threads=self.settings.ai_threads)
+
+    def backend(self) -> Optional[InferenceBackend]:
+        model = self.active_model()
+        if model is None:
+            return None
+        if self._backend is None or getattr(self._backend, "model_id", None) != model.id:
+            self.stop_ai()
+            self._backend = self.backend_factory(model)
+        return self._backend
+
+    def stop_ai(self) -> None:
+        if self._backend is not None:
+            try:
+                self._backend.stop()
+            finally:
+                self._backend = None
+
+    def test_model(self, model_id: str) -> Dict[str, Any]:
+        self.select_model(model_id)
+        backend = self.backend()
+        if backend is None:
+            raise ModelError("The model file is missing.", hint="Download the model first.")
+        backend.start()
+        result = run_inference_check(backend)
+        self.registry.update(model_id, inference_ok=bool(result["ok"]), last_test=result)
+        return result
+
+    def model_cache_key(self, model: LocalModel) -> str:
+        state = self.registry.state(model.id)
+        return state.get("sha256") or f"{model.id}:{state.get('size') or ''}"
+
+    # ------------------------------------------------------------ semantics
+    def semantic_store(self) -> SemanticStore:
+        return SemanticStore(self.require_project(), self.response_cache)
+
+    def semantic_items(self, entity_type: str, include_short_cues: bool = False) -> List[tuple]:
+        if entity_type == "track":
+            return [(str(t["id"]), track_document(t)) for t in self.library_tracks()
+                    if t["status"] == "ok" and not t.get("duplicate_of")]
+        model = self.game_model()
+        if model is None:
+            return []
+        return [(str(c.segment_id), cue_document(model, c)) for c in model.cues
+                if include_short_cues or not self.is_short_cue(c)]
+
+    @staticmethod
+    def is_short_cue(cue) -> bool:
+        return cue.is_transition or (cue.duration_ms is not None and cue.duration_ms < SHORT_CUE_MS)
+
+    def analyze_semantics(self, use_ai: bool = True, progress=None, cancel=None) -> Dict[str, RunStats]:
+        """Describe user tracks and game cues (rules always; local AI when a model is selected)."""
+
+        store = self.semantic_store()
+        backend = self.backend() if use_ai else None
+        model_key = self.model_cache_key(self.active_model()) if backend else ""
+        if backend is not None:
+            if progress:
+                progress("Starting the local AI model", 0, 0)
+            backend.start()
+        results = {}
+        tracks = self.semantic_items("track")
+        results["track"] = store.run("track", tracks, backend, model_key, progress, cancel)
+        store.forget_missing("track", [k for k, _d in tracks])
+        cues = self.semantic_items("cue", include_short_cues=True)
+        results["cue"] = store.run("cue", cues, backend, model_key, progress, cancel)
+        project = self.require_project()
+        project.set("semantics_last_run", {"at": now_iso(), "model": backend.model_id if backend else "",
+                                           "tracks": len(tracks), "cues": len(cues)})
+        for kind, stats in results.items():
+            if stats.llm_errors:
+                project.add_event("warning", "ai", f"The local AI could not describe {stats.llm_errors} "
+                                  f"{'tracks' if kind == 'track' else 'cues'}; rule-based descriptions are used for them.",
+                                  "\n".join(stats.errors))
+        return results
+
+    def profiles(self, entity_type: str) -> Dict[str, EffectiveProfile]:
+        return self.semantic_store().effective_all(entity_type)
+
     # --------------------------------------------------------------- status
     def project_status(self) -> ProjectStatus:
         project = self.require_project()
@@ -299,12 +494,21 @@ class Studio:
             status.warnings.append(f"The music folder is no longer available: {library_path}")
         else:
             steps.append(WorkflowStep(3, "Select music library folder", OK, library_path))
-        steps.append(WorkflowStep(4, "Choose AI model", UNAVAILABLE, "Local AI arrives in a later version (Phase 3)."))
-        if counts.get("ok"):
-            detail = f"{counts.get('ok', 0)} tracks analysed"
+        model = self.active_model()
+        if model is not None:
+            steps.append(WorkflowStep(4, "Choose AI model", OK, model.display_name))
+        elif self.settings.ai_model_id:
+            steps.append(WorkflowStep(4, "Choose AI model", WARN, "The selected model is not downloaded."))
+        else:
+            steps.append(WorkflowStep(4, "Choose AI model", WARN, "No model: rule-based descriptions only (optional)."))
+        described = int(project.query_one("SELECT COUNT(DISTINCT entity_key) FROM semantic_profile WHERE entity_type='track'")[0])
+        if counts.get("ok") and described:
+            detail = f"{counts.get('ok', 0)} tracks scanned, {described} described"
             if counts.get("error"):
                 detail += f", {counts['error']} unreadable"
             steps.append(WorkflowStep(5, "Analyze music", WARN if counts.get("error") else OK, detail))
+        elif counts.get("ok"):
+            steps.append(WorkflowStep(5, "Analyze music", WARN, f"{counts['ok']} tracks scanned; not described yet."))
         else:
             steps.append(WorkflowStep(5, "Analyze music", MISSING))
         if counts.get("missing"):

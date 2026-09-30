@@ -27,6 +27,10 @@ class Settings:
     # (ComDlg32 MRU lists). The Qt dialog does not, so it is the portable default.
     use_native_dialogs: bool = False
     log_level: str = "INFO"
+    ai_model_id: str = ""                     # selected local model ("" = rule-based descriptions only)
+    ai_gpu_layers: str = "auto"               # "auto", "0" (CPU only) or a layer count
+    ai_threads: int = 0                       # 0 = llama.cpp default
+    llama_server_path: str = ""               # empty = bundled runtime/llama/
     window_geometry: str = ""                 # hex-encoded QByteArray
     extra: Dict[str, Any] = field(default_factory=dict)
 

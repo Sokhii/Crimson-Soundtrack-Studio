@@ -25,7 +25,7 @@ version = { attr = "soundtrack_studio.__version__" }
 where = ["src"]
 
 [tool.setuptools.package-data]
-soundtrack_studio = ["testing/*.sql"]
+soundtrack_studio = ["testing/*.sql", "resources/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

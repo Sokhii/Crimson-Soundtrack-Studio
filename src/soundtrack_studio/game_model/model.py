@@ -38,6 +38,7 @@ class MediaInfo:
     role: Optional[str] = None                              # Analyzer classification (music/likely_music/...)
     role_confidence: Optional[str] = None
     name: Optional[str] = None
+    community: List[Dict[str, Any]] = field(default_factory=list)   # public research notes (via the Analyzer)
     found: bool = True                                      # False when no WEM record exists for the ID
 
 

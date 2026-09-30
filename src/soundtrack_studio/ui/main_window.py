@@ -19,6 +19,7 @@ from ..config import Settings
 from ..library.scanner import ScanProgress
 from ..services import Studio
 from . import workers
+from .ai_page import AIPage
 from .game_page import GameDataPage
 from .home_page import HomePage
 from .library_page import LibraryPage
@@ -130,6 +131,7 @@ class MainWindow(QMainWindow):
         self._add_page("home", "Home", HomePage(self))
         self._add_page("game", "Game Data", GameDataPage(self))
         self._add_page("library", "Music Library", LibraryPage(self))
+        self._add_page("ai", "AI Model", AIPage(self))
         self._add_page("matching", "Matching", PlaceholderPage(
             "Matching",
             "Thematic matching arrives in a later version.<br><br>It will propose which of your tracks fits each "
@@ -208,7 +210,8 @@ class MainWindow(QMainWindow):
         self.refresh(reload_game_data=True)
 
     # ------------------------------------------------------------------ jobs
-    def run_job(self, title: str, fn: Callable, on_done: Optional[Callable] = None) -> None:
+    def run_job(self, title: str, fn: Callable, on_done: Optional[Callable] = None,
+                on_fail: Optional[Callable] = None) -> None:
         if self.job is not None:
             QMessageBox.information(self, APP_DISPLAY_NAME, "Please wait until the current task has finished.")
             return
@@ -231,6 +234,8 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(title + " - stopped.", 5000)
             self.error(exc)
             self.refresh()
+            if on_fail:
+                on_fail()
 
         job.signals.done.connect(finished)
         job.signals.error.connect(failed)
@@ -269,6 +274,29 @@ class MainWindow(QMainWindow):
 
         self.run_job("Scanning music library", work, on_done=done)
 
+    def describe_music(self) -> None:
+        if self.studio.project is None:
+            return
+        use_ai = self.studio.active_model() is not None
+
+        def done(results) -> None:
+            self.refresh(reload_game_data=True)
+            parts = []
+            for kind, stats in results.items():
+                noun = "of your tracks" if kind == "track" else "game cues"
+                parts.append(f"{stats.total} {noun}: {stats.llm_done + stats.llm_from_cache} by the AI, "
+                             f"{stats.skipped} unchanged, {stats.llm_errors} AI failures")
+            self.statusBar().showMessage("Descriptions updated. " + "; ".join(parts), 15000)
+
+        self.run_job("Describing music" + (" with the local AI" if use_ai else " (rule-based)"),
+                     lambda report, cancelled: self.studio.analyze_semantics(use_ai, report, cancelled), on_done=done)
+
+    def confirm(self, title: str, text: str) -> bool:
+        return QMessageBox.question(self, title, text) == QMessageBox.StandardButton.Yes
+
+    def info(self, title: str, text: str) -> None:
+        QMessageBox.information(self, title, text)
+
     def load_game_model(self) -> None:
         page: GameDataPage = self.pages["game"]
         if self.job is not None:  # reloaded when the running task finishes
@@ -288,6 +316,8 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(f"{project.name} - {APP_DISPLAY_NAME}" if project else APP_DISPLAY_NAME)
         self.pages["home"].refresh()
         self.pages["library"].refresh()
+        if self.stack.currentWidget() is self.pages["ai"]:
+            self.pages["ai"].refresh()
         if reload_game_data:
             self.pages["game"].set_model(None)
             if self.stack.currentWidget() is self.pages["game"]:

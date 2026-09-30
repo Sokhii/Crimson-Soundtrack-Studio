@@ -162,6 +162,22 @@ class AnalyzerReader:
                     out.setdefault(r["source_id"], []).append(r["stream_type"])
         return out
 
+    def community_notes(self, source_ids: Iterable[int]) -> Dict[int, List[Dict[str, Any]]]:
+        """Community research rows (imported by the Analyzer from public guides) per media ID."""
+
+        if not self.has_table("community_media"):
+            return {}
+        ids = sorted({int(i) for i in source_ids})
+        out: Dict[int, List[Dict[str, Any]]] = {}
+        for i in range(0, len(ids), 500):
+            part = ids[i:i + 500]
+            marks = ",".join("?" * len(part))
+            for r in self._q(f"SELECT media_id, description, context, category, original_name FROM community_media"
+                             f" WHERE media_id IN ({marks})", part):
+                out.setdefault(r["media_id"], []).append({k: r[k] for k in ("description", "context", "category",
+                                                                             "original_name") if r[k]})
+        return out
+
     def classification_counts(self, inst_id: int) -> Dict[str, int]:
         return {r["role"]: r["c"] for r in self._q(
             "SELECT role, COUNT(*) c FROM classification WHERE installation_id=? AND entity_type='media' GROUP BY role",

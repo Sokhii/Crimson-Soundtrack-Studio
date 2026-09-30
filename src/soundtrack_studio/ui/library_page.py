@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (QHBoxLayout, QHeaderView, QLabel, QLineEdit, QPus
                                QTextBrowser, QVBoxLayout, QWidget)
 
 from ..library.features import METHODS
+from .semantic_widgets import ProfileEditor, profile_html
 from .widgets import esc, fmt_bytes, fmt_duration
 
 COLUMNS = ["Title", "Status", "Artist", "Album", "Length", "Format", "Tempo (est.)", "Energy", "Brightness", "File"]
@@ -112,9 +113,19 @@ class LibraryPage(QWidget):
         self.table.verticalHeader().setVisible(False)
         self.table.selectionModel().currentRowChanged.connect(self.show_track)
         split.addWidget(self.table)
+        side = QWidget()
+        side_layout = QVBoxLayout(side)
+        side_layout.setContentsMargins(0, 0, 0, 0)
         self.details = QTextBrowser()
-        split.addWidget(self.details)
-        split.setSizes([760, 360])
+        side_layout.addWidget(self.details, 1)
+        self.edit_btn = QPushButton("Edit character…")
+        self.edit_btn.setEnabled(False)
+        self.edit_btn.clicked.connect(self.edit_profile)
+        side_layout.addWidget(self.edit_btn)
+        split.addWidget(side)
+        split.setSizes([760, 380])
+        self.profiles = {}
+        self.current_track = None
         layout.addWidget(split, 1)
 
     def refresh(self) -> None:
@@ -128,6 +139,7 @@ class LibraryPage(QWidget):
         self.path.setText(path or "No music folder selected.")
         self.scan_btn.setEnabled(bool(path))
         rows = studio.library_tracks()
+        self.profiles = studio.profiles("track")
         self.model.set_rows(rows)
         self.table.resizeColumnsToContents()
         counts = studio.library_counts()
@@ -139,6 +151,8 @@ class LibraryPage(QWidget):
         if not current.isValid():
             return
         t = self.model.rows[self.proxy.mapToSource(current).row()]
+        self.current_track = t
+        self.edit_btn.setEnabled(str(t["id"]) in self.profiles)
         f = t.get("features") or {}
         out = [f"<h3>{esc(_title(t))}</h3>", f"<p style='color:gray'>{esc(t['root'])}/{esc(t['rel_path'])}</p>"]
         if t["status"] == "error":
@@ -156,6 +170,8 @@ class LibraryPage(QWidget):
             if value not in (None, ""):
                 out.append(f"<tr><td style='color:gray;padding-right:10px'>{label}</td><td>{esc(value)}</td></tr>")
         out.append("</table>")
+        if t["status"] == "ok":
+            out.append(profile_html(self.profiles.get(str(t["id"]))))
         if f:
             rows = [
                 ("Tempo", f"{f['tempo_bpm']:g} BPM (confidence {f.get('tempo_confidence', 0):.2f})" if f.get("tempo_bpm")
@@ -187,9 +203,27 @@ class LibraryPage(QWidget):
         self.details.setHtml("".join(out))
 
 
+    def edit_profile(self) -> None:
+        t = self.current_track
+        effective = self.profiles.get(str(t["id"])) if t else None
+        if effective is None:
+            return
+        base = effective.llm or effective.rules
+        dialog = ProfileEditor(base, effective.profile, _title(t), self)
+        if dialog.exec():
+            store = self.host.studio.semantic_store()
+            if dialog.reset_requested:
+                store.clear_override("track", str(t["id"]))
+            else:
+                store.set_override("track", str(t["id"]), dialog.values())
+            self.profiles = self.host.studio.profiles("track")
+            self.show_track(self.table.currentIndex())
+
+
 def _num(value) -> str:
     return "" if value is None else f"{value:.2f}"
 
 
 def _unit(value, unit: str) -> str:
     return "" if value is None else f"{value:g} {unit}"
+

@@ -20,7 +20,7 @@ from .model import (KIND_BY_TYPE, BankInfo, GameMusicModel, MediaInfo, MusicCue,
 
 log = logging.getLogger(__name__)
 
-BUILDER_VERSION = 1
+BUILDER_VERSION = 2
 # reference kinds from a container to something it plays (same set the Analyzer walks)
 CHILD_KINDS = ("child", "playlist_segment", "switch_assoc")
 PARSE_RANK = {"parsed": 3, "shallow": 2, "partial": 1}
@@ -139,6 +139,7 @@ def build(reader: AnalyzerReader, sha: str, inst_id: int,
     media_rows = reader.media(inst_id, all_sources)
     streaming = reader.media_streaming(inst_id, all_sources)
     media_names = reader.best_names(all_sources)
+    community = reader.community_notes(all_sources)
     media: Dict[int, MediaInfo] = {}
     missing_media = 0
     for sid in all_sources:
@@ -146,7 +147,8 @@ def build(reader: AnalyzerReader, sha: str, inst_id: int,
         if not row or "codec" not in row:
             missing_media += 1
             media[sid] = MediaInfo(source_id=sid, found=False, streaming=sorted(set(streaming.get(sid, []))),
-                                   role=(row or {}).get("role"), name=media_names.get(sid))
+                                   role=(row or {}).get("role"), name=media_names.get(sid),
+                                   community=community.get(sid, []))
             continue
         media[sid] = MediaInfo(
             source_id=sid, codec=row.get("codec"), channels=row.get("channels"), sample_rate=row.get("sample_rate"),
@@ -154,7 +156,8 @@ def build(reader: AnalyzerReader, sha: str, inst_id: int,
             containers=sorted({loc["container"] for loc in row["locations"]}),
             paths=sorted({loc["path"] for loc in row["locations"]}),
             streaming=sorted(set(streaming.get(sid, []))), has_loop_points=bool(row.get("loops")),
-            role=row.get("role"), role_confidence=row.get("role_confidence"), name=media_names.get(sid))
+            role=row.get("role"), role_confidence=row.get("role_confidence"), name=media_names.get(sid),
+            community=community.get(sid, []))
     if missing_media:
         warnings.append(f"{missing_media} media IDs referenced by music tracks have no WEM record in the Analyzer "
                         "database (possibly cut content or files outside the scanned archives).")

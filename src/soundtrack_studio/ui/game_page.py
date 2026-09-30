@@ -6,11 +6,12 @@ import json
 from typing import Optional
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (QCheckBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QSplitter, QTableWidget,
+from PySide6.QtWidgets import (QCheckBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QPushButton, QSplitter, QTableWidget,
                                QTableWidgetItem, QTabWidget, QTextBrowser, QTreeWidget, QTreeWidgetItem, QVBoxLayout,
                                QWidget)
 
 from ..game_model.model import KIND_LABEL, GameMusicModel, MusicCue, MusicNode
+from .semantic_widgets import ProfileEditor, profile_html
 from .widgets import esc, fmt_duration
 
 ROLE_ID = Qt.ItemDataRole.UserRole
@@ -77,9 +78,18 @@ class GameDataPage(QWidget):
         self.banks.currentCellChanged.connect(lambda r, *_: self._select(("bank", self._row_id(self.banks, r))))
         self.tabs.addTab(self.banks, "Soundbanks")
         split.addWidget(self.tabs)
+        side = QWidget()
+        side_layout = QVBoxLayout(side)
+        side_layout.setContentsMargins(0, 0, 0, 0)
         self.details = QTextBrowser()
         self.details.setOpenLinks(False)
-        split.addWidget(self.details)
+        side_layout.addWidget(self.details, 1)
+        self.edit_btn = QPushButton("Edit character…")
+        self.edit_btn.setEnabled(False)
+        self.edit_btn.clicked.connect(self.edit_profile)
+        side_layout.addWidget(self.edit_btn)
+        split.addWidget(side)
+        self.profiles = {}
         split.setSizes([640, 420])
         layout.addWidget(split, 1)
         self._current = None
@@ -88,6 +98,7 @@ class GameDataPage(QWidget):
     def set_model(self, model: Optional[GameMusicModel]) -> None:
         self.model = model
         self.cue_by_segment = {c.segment_id: c for c in model.cues} if model else {}
+        self.profiles = self.host.studio.profiles("cue") if model is not None and self.host.studio.project else {}
         self.tree.clear()
         self.cues.setRowCount(0)
         self.banks.setRowCount(0)
@@ -252,7 +263,11 @@ class GameDataPage(QWidget):
         node = self.model.nodes.get(ident)
         if node is None:
             return
-        self.details.setHtml(self._node_html(node))
+        self.edit_btn.setEnabled(str(ident) in self.profiles)
+        html = self._node_html(node)
+        if node.kind == "segment":
+            html += profile_html(self.profiles.get(str(ident)), "Musical character (inferred)")
+        self.details.setHtml(html)
 
     def _node_html(self, node: MusicNode) -> str:
         m = self.model
@@ -309,3 +324,22 @@ class GameDataPage(QWidget):
             out.append("<h4>Technical details (from the Analyzer)</h4><pre style='font-size:11px'>"
                        + esc(json.dumps(node.fields, indent=2, ensure_ascii=False)[:20000]) + "</pre>")
         return "".join(out)
+
+
+    def edit_profile(self) -> None:
+        key = self._current
+        if not key or key[0] != "node":
+            return
+        effective = self.profiles.get(str(key[1]))
+        if effective is None:
+            return
+        node = self.model.nodes[key[1]]
+        dialog = ProfileEditor(effective.llm or effective.rules, effective.profile, node.label, self)
+        if dialog.exec():
+            store = self.host.studio.semantic_store()
+            if dialog.reset_requested:
+                store.clear_override("cue", str(key[1]))
+            else:
+                store.set_override("cue", str(key[1]), dialog.values())
+            self.profiles = self.host.studio.profiles("cue")
+            self.show_current()

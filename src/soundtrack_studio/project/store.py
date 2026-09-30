@@ -125,6 +125,32 @@ MIGRATIONS: List[tuple[int, str]] = [
         details TEXT
     );
     """),
+    (2, """
+    -- interpretations (never facts): one row per entity and source (rules | llm)
+    CREATE TABLE semantic_profile (
+        id INTEGER PRIMARY KEY,
+        entity_type TEXT NOT NULL,           -- track | cue
+        entity_key TEXT NOT NULL,            -- track id | Wwise segment id
+        source TEXT NOT NULL,                -- rules | llm
+        model_id TEXT NOT NULL DEFAULT '',
+        prompt_version INTEGER NOT NULL DEFAULT 0,
+        input_hash TEXT NOT NULL,            -- hash of the evidence document the profile was made from
+        status TEXT NOT NULL,                -- ok | error
+        profile_json TEXT,
+        evidence_json TEXT,
+        error TEXT,
+        created_at TEXT NOT NULL,
+        UNIQUE (entity_type, entity_key, source)
+    );
+    -- the user's edits; always win over rules and AI
+    CREATE TABLE semantic_override (
+        entity_type TEXT NOT NULL,
+        entity_key TEXT NOT NULL,
+        override_json TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (entity_type, entity_key)
+    );
+    """),
 ]
 LATEST_VERSION = MIGRATIONS[-1][0]
 

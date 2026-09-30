@@ -93,3 +93,33 @@ def test_all_pages_render_without_project(app, paths, monkeypatch):
         app.processEvents()
     assert w.pages["home"].title.text() == "No project open"
     w.close()
+
+
+def test_ai_page_and_describe_music(app, window, tmp_path, analyzer_db):
+    from soundtrack_studio.ai.runtime import ScriptedBackend
+
+    good = ('{"mood": ["dark"], "emotion": [], "atmosphere": ["vast"], "instrumentation": [], "style": ["orchestral"],'
+            ' "themes": [], "energy": 40, "darkness": 80, "tension": 50, "valence": 20, "vocal_presence": null,'
+            ' "confidence": 70, "summary": "Dark and vast."}')
+    model_file = tmp_path / "m.gguf"
+    model_file.write_bytes(b"GGUF" + b"\0" * 100)
+    studio = window.studio
+    studio.select_model(studio.add_custom_model(model_file).id)
+    studio.backend_factory = lambda model: ScriptedBackend([good], model_id=model.id)
+    studio.import_analyzer(analyzer_db)
+    music = tmp_path / "Music"
+    write_test_flac(music / "a.flac", seconds=2, tags={"TITLE": "Night"})
+    studio.set_library_path(music)
+    studio.scan_library()
+    window.nav.setCurrentRow(3)  # AI Model page
+    app.processEvents()
+    page = window.pages["ai"]
+    assert "Recommended tier" in page.hw_label.text() and "m" in page.active_label.text()
+    window.describe_music()
+    wait(app, window)
+    assert not window.errors
+    assert all(p.source == "llm" for p in studio.profiles("track").values())
+    window.nav.setCurrentRow(2)
+    library = window.pages["library"]
+    library.table.selectRow(0)
+    assert "Dark and vast." in library.details.toPlainText() and library.edit_btn.isEnabled()

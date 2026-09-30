@@ -107,6 +107,10 @@ def run_selftest(paths: AppPaths, keep: bool = False) -> Dict[str, Any]:
                                and opening.get("year") == 2024 and opening.get("composer") == "Nobody")
         checks["unicode_path_read"] = tracks.get("Album A/CD2/02 Ünïcødé – 音楽.flac", {}).get("status") == "ok"
         checks["tempo_estimated"] = abs(((opening.get("features") or {}).get("tempo_bpm") or 0) - 120) < 3
+        described = studio.analyze_semantics(use_ai=False)
+        profiles = studio.profiles("track")
+        checks["music_described_rule_based"] = (described["track"].rules_done == 3 and described["cue"].rules_done == 4
+                                                 and all(p.source == "rules" for p in profiles.values()))
         second = studio.scan_library()
         checks["rescan_uses_cache"] = second.unchanged == 4 and second.analyzed == 0
         checks["music_files_untouched"] = _tree_fingerprint(music) == before_music
