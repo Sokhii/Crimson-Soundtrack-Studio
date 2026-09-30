@@ -67,6 +67,8 @@ class ClapModel:
         self.audio = self._session(ort, files["audio"], options, wanted)
         self.provider = self.audio.get_providers()[0]
         self._text = None
+        self._tokenizer = None
+        self._text_gpu_tried = False
         self._ort, self._options = ort, options
         self._audio_inputs = {i.name: i for i in self.audio.get_inputs()}
         if "input_features" not in self._audio_inputs:
@@ -113,25 +115,41 @@ class ClapModel:
 
     # ------------------------------------------------------------------- text
     def _text_session(self):
-        if self._text is None:
+        if self._tokenizer is None:
             try:
                 from tokenizers import Tokenizer
             except ImportError as exc:  # pragma: no cover
                 raise ListeningError("The listening runtime (tokenizers) is not installed.") from exc
-            # the text tower runs once per prompt list; the CPU is plenty and avoids GPU memory
-            self._text = self._session(self._ort, self.files["text"], self._ort.SessionOptions(), ["CPUExecutionProvider"])
             tok_path = self.model_dir / self.files["tokenizer"]
             if not tok_path.is_file():
                 raise ListeningError("A listening model file is missing.", details=str(tok_path))
-            self._tokenizer = Tokenizer.from_file(os_path(tok_path))
-            self._tokenizer.enable_padding(pad_id=1, pad_token="<pad>")
-            self._tokenizer.enable_truncation(max_length=512)
+            tokenizer = Tokenizer.from_file(os_path(tok_path))
+            tokenizer.enable_padding(pad_id=1, pad_token="<pad>")
+            tokenizer.enable_truncation(max_length=512)
+            self._tokenizer = tokenizer
+        if self._text is None:
+            # the text tower runs once per prompt list; the CPU is plenty and avoids GPU memory
+            self._text = self._session(self._ort, self.files["text"], self._ort.SessionOptions(), ["CPUExecutionProvider"])
         return self._text
 
     def embed_text(self, texts: Sequence[str], batch_size: int = 1) -> np.ndarray:
         """Normalised text embeddings, one prompt per run (the int8 text tower once mishandled padding; the fp16
         tower now used matches PyTorch either way, and prompts are embedded only once per model)."""
 
+        try:
+            return self._embed_text(texts, batch_size)
+        except Exception as exc:  # noqa: BLE001 - older CPU kernels may lack fp16 operators
+            if self._text_gpu_tried or "DmlExecutionProvider" not in self._ort.get_available_providers():
+                raise ListeningError("The listening model could not read its word list.", details=str(exc)) from exc
+            log.warning("Listening text model failed on the CPU (%s); trying the graphics card", exc)
+            self._text_gpu_tried = True
+            options = self._ort.SessionOptions()
+            options.enable_mem_pattern = False
+            self._text = self._session(self._ort, self.files["text"], options,
+                                       ["DmlExecutionProvider", "CPUExecutionProvider"])
+            return self._embed_text(texts, batch_size)
+
+    def _embed_text(self, texts: Sequence[str], batch_size: int) -> np.ndarray:
         session = self._text_session()
         names = {i.name for i in session.get_inputs()}
         out = []
@@ -143,7 +161,7 @@ class ClapModel:
             result = session.run(None, feed)
             outputs = [o.name for o in session.get_outputs()]
             out.append(result[outputs.index("text_embeds")] if "text_embeds" in outputs else result[0])
-        return _normalise(np.concatenate(out, axis=0))
+        return _normalise(np.concatenate(out, axis=0).astype(np.float32))
 
 
 def default_threads() -> int:

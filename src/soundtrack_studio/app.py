@@ -103,7 +103,13 @@ def main(argv: Optional[List[str]] = None) -> int:
             _print(text)
             return 0 if result["ok"] else 1
         if args.listen_check:
-            result = _listen_check(paths, settings, args.listen_check)
+            try:
+                result = _listen_check(paths, settings, args.listen_check)
+            except Exception as exc:  # noqa: BLE001 - reported in the JSON result; a windowed EXE must not block
+                import traceback
+
+                result = {"ok": False, "error": f"{getattr(exc, 'message', exc)} {getattr(exc, 'details', '')}".strip(),
+                          "traceback": traceback.format_exc()[-4000:]}
             text = json.dumps(result, indent=2, ensure_ascii=False)
             (paths.logs / "listen_check.json").write_text(text, encoding="utf-8")
             _print(text)

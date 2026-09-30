@@ -13,6 +13,7 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -95,6 +96,7 @@ jobs:
           path: clap-home/models
           key: clap-win-${{ hashFiles('src/soundtrack_studio/listening/catalog.py') }}
       - name: Frozen EXE runs the optional listening model (ONNX Runtime + DirectML, CPU fallback)
+        timeout-minutes: 10
         shell: pwsh
         run: |
           python tools/fetch_listening_model.py --home clap-home
