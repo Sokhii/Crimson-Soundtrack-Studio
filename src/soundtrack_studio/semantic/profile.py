@@ -182,18 +182,24 @@ RELATED = {
 RELATED |= {(b, a) for a, b in RELATED}
 
 
+RELATED_MAP: Dict[str, frozenset] = {}
+for _a, _b in RELATED:
+    RELATED_MAP[_a] = RELATED_MAP.get(_a, frozenset()) | {_b}
+
+
 def _set_similarity(a: Iterable[str], b: Iterable[str]) -> Optional[float]:
-    a, b = list(dict.fromkeys(a)), list(dict.fromkeys(b))
-    if not a or not b:
+    """Symmetric tag overlap: exact match 1.0, related tag 0.5 (see RELATED)."""
+
+    a_set, b_set = set(a), set(b)
+    if not a_set or not b_set:
         return None
+    empty = frozenset()
     score = 0.0
-    for x in a:
-        best = 1.0 if x in b else max((0.5 for y in b if (x, y) in RELATED), default=0.0)
-        score += best
-    for y in b:
-        best = 1.0 if y in a else max((0.5 for x in a if (x, y) in RELATED), default=0.0)
-        score += best
-    return score / (len(a) + len(b))
+    for x in a_set:
+        score += 1.0 if x in b_set else (0.5 if RELATED_MAP.get(x, empty) & b_set else 0.0)
+    for y in b_set:
+        score += 1.0 if y in a_set else (0.5 if RELATED_MAP.get(y, empty) & a_set else 0.0)
+    return score / (len(a_set) + len(b_set))
 
 
 def similarity(a: SemanticProfile, b: SemanticProfile) -> Tuple[float, Dict[str, float]]:

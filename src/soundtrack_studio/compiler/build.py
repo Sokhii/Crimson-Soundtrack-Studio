@@ -33,7 +33,7 @@ from ..game_model.model import GameMusicModel
 from ..matching.store import MappingEntry
 from . import bnk, wem
 from .archive import CompileError, GameFileReader
-from .audio import TARGET_RATE, FitSettings, render_timeline
+from .audio import TARGET_RATE, FitSettings, map_channels, render_timeline
 from .plan import build_plan, timeline_slice_frames
 from .validate import ValidationResult, validate_output
 
@@ -125,52 +125,29 @@ class ModBuilder:
         cue_report: Dict[str, Any] = {}
         embedded: Dict[int, bytes] = {}
         try:
-            # 1. render one timeline per cue, slice it for each source
-            timelines: Dict[str, np.ndarray] = {}
-            music_jobs = [j for j in plan.jobs.values() if j.role == "music"]
-            for i, cue_key in enumerate(sorted({j.cue_key for j in music_jobs})):
+            # 1. one cue at a time: render its timeline, write its sources, release the audio
+            #    (a full soundtrack would not fit in memory if all timelines were kept)
+            jobs_by_cue: Dict[str, list] = {}
+            for job in plan.jobs.values():
+                jobs_by_cue.setdefault(job.cue_key, []).append(job)
+            for i, cue_key in enumerate(sorted(jobs_by_cue)):
                 if cancel and cancel():
                     raise OperationCancelled()
                 entry = plan.cues[cue_key]
-                report_progress("Preparing replacement audio", i, len(plan.cues))
-                fit = FitSettings(entry.fit_mode, entry.start_offset_s, self.settings.normalize, self.settings.target_rms_dbfs)
-                audio, info = render_timeline(self.track_paths[entry.track_id], plan.cue_durations[cue_key],
-                                              plan.cue_channels[cue_key], fit)
-                timelines[cue_key] = audio
-                cue_report[cue_key] = {"track_id": entry.track_id, "track_file": self.track_paths[entry.track_id].name,
-                                       "duration_s": plan.cue_durations[cue_key], "decided_by": entry.decided_by, **info}
-            for job in plan.jobs.values():
-                if cancel and cancel():
-                    raise OperationCancelled()
-                start, frames = timeline_slice_frames(job, TARGET_RATE)
-                if job.role == "music":
-                    timeline = timelines[job.cue_key]
-                    piece = np.zeros((frames, timeline.shape[1]), np.float32)
-                    available = max(0, min(frames, len(timeline) - start))
-                    if available:
-                        piece[:available] = timeline[start:start + available]
-                    if piece.shape[1] != job.channels:
-                        from .audio import map_channels
-                        piece = map_channels(piece, job.channels)
-                else:
-                    piece = np.zeros((frames, job.channels), np.float32)
-                data = wem.build_pcm_wem(piece, TARGET_RATE)
-                bank_rels = []
-                for use in job.uses:
-                    package = self._package(use.bank_vpath)
-                    bank_rels.append(f"{package}/{use.bank_vpath}")
-                sources_report[str(job.source_id)] = {
-                    "cue": job.cue_key, "role": job.role, "stream_type": job.stream_type, "frames": frames,
-                    "channels": job.channels, "banks": sorted(set(bank_rels)), "play_at_s": job.play_at_s}
-                if job.stream_type == 0:
-                    embedded[job.source_id] = data
-                else:
-                    rel = f"{self._package(job.wem_vpath)}/{job.wem_vpath}"
-                    target = files_root / rel
-                    target.parent.mkdir(parents=True, exist_ok=True)
-                    target.write_bytes(data)
-                    written.append(rel)
-                    sources_report[str(job.source_id)]["file"] = rel
+                report_progress("Preparing replacement audio", i, len(jobs_by_cue))
+                timeline = None
+                if any(j.role == "music" for j in jobs_by_cue[cue_key]):
+                    fit = FitSettings(entry.fit_mode, entry.start_offset_s, self.settings.normalize,
+                                      self.settings.target_rms_dbfs)
+                    timeline, info = render_timeline(self.track_paths[entry.track_id], plan.cue_durations[cue_key],
+                                                     plan.cue_channels[cue_key], fit)
+                    cue_report[cue_key] = {"track_id": entry.track_id,
+                                           "track_file": self.track_paths[entry.track_id].name,
+                                           "duration_s": plan.cue_durations[cue_key], "decided_by": entry.decided_by,
+                                           **info}
+                for job in jobs_by_cue[cue_key]:
+                    self._write_source(job, timeline, files_root, written, sources_report, embedded)
+                del timeline
 
             # 2. patch every affected bank (read-only access to the game)
             banks = plan.banks()
@@ -242,6 +219,33 @@ class ModBuilder:
             return BuildResult(final, zip_path, report, validation, plan.warnings)
         finally:
             shutil.rmtree(work, ignore_errors=True)
+
+    def _write_source(self, job, timeline: Optional[np.ndarray], files_root: Path, written: List[str],
+                      sources_report: Dict[str, Any], embedded: Dict[int, bytes]) -> None:
+        start, frames = timeline_slice_frames(job, TARGET_RATE)
+        if job.role == "music" and timeline is not None:
+            piece = np.zeros((frames, timeline.shape[1]), np.float32)
+            available = max(0, min(frames, len(timeline) - start))
+            if available:
+                piece[:available] = timeline[start:start + available]
+            if piece.shape[1] != job.channels:
+                piece = map_channels(piece, job.channels)
+        else:
+            piece = np.zeros((frames, job.channels), np.float32)
+        data = wem.build_pcm_wem(piece, TARGET_RATE)
+        bank_rels = sorted({f"{self._package(u.bank_vpath)}/{u.bank_vpath}" for u in job.uses})
+        sources_report[str(job.source_id)] = {
+            "cue": job.cue_key, "role": job.role, "stream_type": job.stream_type, "frames": frames,
+            "channels": job.channels, "banks": bank_rels, "play_at_s": job.play_at_s}
+        if job.stream_type == 0:
+            embedded[job.source_id] = data
+            return
+        rel = f"{self._package(job.wem_vpath)}/{job.wem_vpath}"
+        target = files_root / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+        written.append(rel)
+        sources_report[str(job.source_id)]["file"] = rel
 
     def _package(self, vpath: str) -> str:
         package = self.reader.package_for_vpath(vpath, self.installation_id)

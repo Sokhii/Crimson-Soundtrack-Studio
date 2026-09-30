@@ -148,7 +148,7 @@ def confidence_label(value: float) -> str:
     return "high" if value >= 0.6 else "medium" if value >= 0.35 else "low"
 
 
-def score_candidate(cue: MusicCue, cue_p: SemanticProfile, track: TrackInfo) -> Optional[Candidate]:
+def score_candidate(cue: MusicCue, cue_p: SemanticProfile, track: TrackInfo, explain_now: bool = True) -> Optional[Candidate]:
     cue_s = (cue.duration_ms or 0) / 1000
     if cue_s and track.duration_s < cue_s * MIN_DURATION_RATIO:
         return None
@@ -156,12 +156,25 @@ def score_candidate(cue: MusicCue, cue_p: SemanticProfile, track: TrackInfo) -> 
     coverage = parts.get("coverage", 0.0)
     # agreement on one attribute is weak evidence: shrink towards neutral when little could be compared
     sem = round(0.5 + (raw_sem - 0.5) * (0.35 + 0.65 * coverage), 4) if parts else 0.0
-    dfit, how = duration_fit(track.duration_s, cue_s)
+    dfit, _how = duration_fit(track.duration_s, cue_s)
     tfit = tempo_fit(cue.tempo_bpm, track.tempo_bpm)
     score = 0.78 * sem + 0.17 * dfit + (0.05 * tfit if tfit is not None else 0.05 * 0.5)
-    reasons = explain(cue_p, track.profile, parts)
+    cand = Candidate(track.id, round(score, 4), sem, dfit, tfit, {**parts, "duration": dfit}, [], [], 0.0)
+    if explain_now:
+        add_explanations(cand, cue, cue_p, track)
+    return cand
+
+
+def add_explanations(cand: Candidate, cue: MusicCue, cue_p: SemanticProfile, track: TrackInfo) -> None:
+    """Reasons and warnings (only built for candidates that will be shown)."""
+
+    if cand.reasons or cand.warnings:
+        return
+    cue_s = (cue.duration_ms or 0) / 1000
+    _dfit, how = duration_fit(track.duration_s, cue_s)
+    reasons = explain(cue_p, track.profile, cand.components)
     reasons.append(f"Length: track {_fmt(track.duration_s)}, cue {_fmt(cue_s)} → {how}")
-    if tfit is not None and tfit >= 0.8:
+    if cand.tempo_fit is not None and cand.tempo_fit >= 0.8:
         reasons.append(f"Compatible tempo ({track.tempo_bpm:g} vs {cue.tempo_bpm:g} BPM)")
     warnings = []
     if cue_s and track.duration_s < cue_s:
@@ -172,7 +185,7 @@ def score_candidate(cue: MusicCue, cue_p: SemanticProfile, track: TrackInfo) -> 
         warnings.append("The game cue's character was guessed from internal names only; please listen and check.")
     if track.profile.source == "rules":
         warnings.append("Your track was described by rules only (no AI model); the match is approximate.")
-    return Candidate(track.id, round(score, 4), sem, dfit, tfit, {**parts, "duration": dfit}, reasons, warnings, 0.0)
+    cand.reasons, cand.warnings = reasons, warnings
 
 
 class Matcher:
@@ -212,11 +225,13 @@ class Matcher:
             for track in self.tracks.values():
                 if track.id in self.rejected.get(key, ()):
                     continue
-                cand = score_candidate(cue, eff.profile, track)
+                cand = score_candidate(cue, eff.profile, track, explain_now=False)
                 if cand is not None:
                     candidates.append(cand)
             candidates.sort(key=lambda c: (-c.score, c.track_id))
             ranked[key] = candidates[: max(SHORTLIST, self.settings.alternatives + 1) * 3]
+            for cand in ranked[key]:
+                add_explanations(cand, cue, eff.profile, self.tracks[cand.track_id])
             results[key] = CueResult(key)
             if not candidates:
                 results[key].skipped_reason = "No track in your library is long enough or described."

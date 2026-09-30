@@ -165,8 +165,8 @@ def render_timeline(path: Path, duration_s: float, channels: int, fit: FitSettin
     """The user's track rendered onto a segment timeline of ``duration_s`` at 48 kHz."""
 
     frames = int(round(duration_s * TARGET_RATE))
-    needed = duration_s + 5.0 if fit.fit_mode in ("auto", "trim", "pad") else 0.0
-    data, rate = read_audio(path, fit.start_offset_s, needed)
+    # never more than the cue needs (a shorter track is read whole anyway; long mixes stay out of memory)
+    data, rate = read_audio(path, fit.start_offset_s, duration_s + 5.0)
     data = map_channels(resample(data, rate, TARGET_RATE), channels)
     out, how = fit_to_length(data, frames, fit.fit_mode)
     gain = 0.0
