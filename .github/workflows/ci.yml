@@ -42,16 +42,26 @@ jobs:
         with:
           path: |
             clap-home/models
+            clap-extra
             ~/.cache/huggingface
-          key: clap-${{ hashFiles('src/soundtrack_studio/listening/catalog.py') }}
+          key: clap-v2-${{ hashFiles('src/soundtrack_studio/listening/catalog.py') }}
       - name: Download the listening model with the Studio's downloader
         run: python tools/fetch_listening_model.py --home clap-home
+      - name: Extra text-tower variants (diagnostics)
+        continue-on-error: true
+        run: |
+          mkdir -p clap-extra
+          for f in text_model.onnx text_model_fp16.onnx; do
+            [ -f clap-extra/$f ] || curl -sSL -o clap-extra/$f "https://huggingface.co/Xenova/larger_clap_music_and_speech/resolve/e9fd5ac1dbf3280936a7fc3ec8a020453ff184db/onnx/$f"
+          done
+          ls -la clap-extra
       - name: Public-domain sample recordings (diagnostics)
         continue-on-error: true
         run: python tools/fetch_reference_samples.py --dest samples --out samples.json
       - name: Reference comparison
         env:
           CSS_CLAP_HOME: clap-home
+          CSS_CLAP_EXTRA: clap-extra
         run: |
           if [ -f samples.json ]; then export CSS_CLAP_SAMPLES="$(cat samples.json)"; fi
           python -m pytest -q -s tests/test_listening_reference.py

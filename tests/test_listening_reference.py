@@ -122,3 +122,30 @@ def test_public_domain_recordings_report(ours, tmp_path):
         print(f"[{item['label']}] {Path(item['path']).name}: vocals={summary.get('vocals')} "
               f"margin={summary.get('vocals_margin')} instruments={summary.get('instrumentation')} "
               f"mood={summary.get('mood')} style={summary.get('style')}")
+
+
+def test_text_variants_diagnostics(model_dir, reference):
+    """Which text tower / batching matches PyTorch best (prints only; CSS_CLAP_EXTRA holds extra ONNX files)."""
+
+    from soundtrack_studio.listening.clap import ClapModel
+    from soundtrack_studio.listening.listen import all_prompts
+
+    torch, model, processor = reference
+    prompts = all_prompts()[:40]
+    tok = processor.tokenizer(prompts, padding=True, return_tensors="pt")
+    with torch.no_grad():
+        ref = _projected(torch, model.get_text_features(**tok), model.text_projection)
+    ref = ref / np.linalg.norm(ref, axis=1, keepdims=True)
+    folder, files = model_dir
+    variants = {"quantized": files["text"]}
+    extra = os.environ.get("CSS_CLAP_EXTRA")
+    for name in ("text_model.onnx", "text_model_fp16.onnx"):
+        if extra and (Path(extra) / name).is_file():
+            variants[name] = str(Path(extra) / name)
+    for name, path in variants.items():
+        m = ClapModel(folder, {**files, "text": path}, device="cpu")
+        batch = m.embed_text(prompts)
+        single = np.concatenate([m.embed_text([p]) for p in prompts])
+        for how, emb in (("batched", batch), ("one at a time", single)):
+            cos = np.sum(emb * ref, axis=1)
+            print(f"text {name} {how}: min {cos.min():.4f} mean {cos.mean():.4f}")
