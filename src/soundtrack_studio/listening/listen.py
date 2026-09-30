@@ -50,6 +50,7 @@ INSTRUMENTAL_PROMPTS = ("instrumental music without vocals", "an instrumental pi
 VOCAL_MARGIN = 0.02
 INSTRUMENTAL_MARGIN = -0.01
 STRONG_Z, MODERATE_Z, MAX_PER_FIELD = 1.6, 1.0, 3
+PROMPT_EMBED_VERSION = 2   # 2: prompts embedded one at a time (batched padding distorted them)
 
 
 def all_prompts() -> List[str]:
@@ -197,6 +198,7 @@ class ListeningCache:
             self.conn.commit()
 
     def prompt_bank(self, model_key: str) -> PromptBank:
+        model_key = f"{model_key}:p{PROMPT_EMBED_VERSION}"
         with self.lock:
             rows = self.conn.execute("SELECT prompt, vector FROM prompt WHERE model_key=?", (model_key,)).fetchall()
         return PromptBank({p: np.frombuffer(v, dtype=np.float32) for p, v in rows})
@@ -206,9 +208,10 @@ class ListeningCache:
         missing = [p for p in all_prompts() if p not in bank.vectors]
         if missing:
             vectors = model.embed_text(missing)
+            stored_key = f"{model_key}:p{PROMPT_EMBED_VERSION}"
             with self.lock:
                 self.conn.executemany("INSERT OR REPLACE INTO prompt VALUES (?,?,?)",
-                                      [(model_key, p, v.astype(np.float32).tobytes()) for p, v in zip(missing, vectors)])
+                                      [(stored_key, p, v.astype(np.float32).tobytes()) for p, v in zip(missing, vectors)])
                 self.conn.commit()
             bank = self.prompt_bank(model_key)
         return bank
