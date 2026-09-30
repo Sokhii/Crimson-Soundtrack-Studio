@@ -60,10 +60,10 @@ def run_selftest(paths: AppPaths, keep: bool = False) -> Dict[str, Any]:
         analyzer_db = work / "Crimson Desert Analyzer" / "data" / "database" / "studio.sqlite3"
         write_analyzer_db(analyzer_db, game_root=game, game_files=game_files)
         music = work / "Music Library"
-        write_test_flac(music / "Album A" / "01 Opening.flac", seconds=12, bpm=120,
+        write_test_flac(music / "Album A" / "01 Opening.flac", seconds=45, bpm=120,
                         tags={"TITLE": "Opening", "ARTIST": "Test Ensemble", "ALBUM": "Album A", "TRACKNUMBER": "1/2",
                               "DATE": "2024-05-01", "GENRE": "Orchestral", "COMPOSER": "Nobody"})
-        write_test_flac(music / "Album A" / "CD2" / "02 Ünïcødé – 音楽.flac", seconds=10, bpm=90, tone_hz=330,
+        write_test_flac(music / "Album A" / "CD2" / "02 Ünïcødé – 音楽.flac", seconds=40, bpm=90, tone_hz=330,
                         tags={"TITLE": "Ünïcødé – 音楽", "ARTIST": "Test Ensemble", "DISCNUMBER": "2"})
         write_test_flac(music / "Loose" / "no tags mono.flac", seconds=9, bpm=None, channels=1, subtype="PCM_24")
         shutil.copyfile(music / "Album A" / "01 Opening.flac", music / "Loose" / "duplicate of opening.flac")
@@ -111,6 +111,11 @@ def run_selftest(paths: AppPaths, keep: bool = False) -> Dict[str, Any]:
         profiles = studio.profiles("track")
         checks["music_described_rule_based"] = (described["track"].rules_done == 3 and described["cue"].rules_done == 4
                                                  and all(p.source == "rules" for p in profiles.values()))
+        match_stats = studio.find_matches()
+        matches = studio.match_store()
+        accepted = matches.accept_all(min_confidence=0.0)
+        checks["thematic_matches_proposed"] = match_stats["proposed"] >= 1 and accepted == match_stats["proposed"]
+        info["matching"] = match_stats
         second = studio.scan_library()
         checks["rescan_uses_cache"] = second.unchanged == 4 and second.analyzed == 0
         checks["music_files_untouched"] = _tree_fingerprint(music) == before_music

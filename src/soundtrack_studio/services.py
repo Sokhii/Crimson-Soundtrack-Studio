@@ -29,6 +29,8 @@ from .game_model.model import GameMusicModel
 from .library.cache import AnalysisCache
 from .library.scanner import LibraryScanner, ScanProgress, ScanStats
 from .project.store import Project, ProjectInfo, list_projects, now_iso
+from .matching.engine import Matcher, MatchSettings, score_candidate, track_infos
+from .matching.store import MatchStore
 from .semantic.context import cue_document, track_document
 from .semantic.store import EffectiveProfile, ResponseCache, RunStats, SemanticStore
 
@@ -434,6 +436,89 @@ class Studio:
     def profiles(self, entity_type: str) -> Dict[str, EffectiveProfile]:
         return self.semantic_store().effective_all(entity_type)
 
+    # -------------------------------------------------------------- matching
+    def match_store(self) -> MatchStore:
+        return MatchStore(self.require_project())
+
+    def find_matches(self, settings: Optional[MatchSettings] = None, progress=None, cancel=None) -> Dict[str, Any]:
+        settings = settings or MatchSettings()
+        model = self.game_model()
+        if model is None:
+            raise AnalyzerDbError("Import an Analyzer database first, so the Studio knows the game's music.")
+        tracks = self.library_tracks()
+        if not any(t["status"] == "ok" for t in tracks):
+            raise LibraryError("Scan a music folder first, so there is music to match.")
+        store = self.semantic_store()
+        track_profiles = store.effective_all("track")
+        cue_profiles = store.effective_all("cue")
+        if not track_profiles or not cue_profiles or len(track_profiles) < len(self.semantic_items("track")):
+            # make sure everything has at least a rule-based description (cheap, no model)
+            self.analyze_semantics(use_ai=False, progress=progress, cancel=cancel)
+            track_profiles = store.effective_all("track")
+            cue_profiles = store.effective_all("cue")
+        infos = track_infos(tracks, track_profiles)
+        backend = self.backend() if settings.use_ai else None
+        if backend is not None:
+            if progress:
+                progress("Starting the local AI model", 0, 0)
+            backend.start()
+        cue_docs = {str(c.segment_id): cue_document(model, c) for c in model.cues} if backend else {}
+        matches = self.match_store()
+        matcher = Matcher(model, cue_profiles, infos, settings, rejected=matches.rejected_map(),
+                          fixed=matches.fixed_map(), backend=backend, cue_docs=cue_docs)
+        results = matcher.run(progress, cancel)
+        stats = {"cues": len(results), "proposed": sum(1 for r in results.values() if r.candidates),
+                 "unmatched": sum(1 for r in results.values() if not r.candidates), "tracks": len(infos),
+                 "ai_errors": len(matcher.ai_errors)}
+        matches.save_run(results, settings, backend.model_id if backend else "", stats)
+        if matcher.ai_errors:
+            self.require_project().add_event("warning", "ai", f"The local AI could not judge {len(matcher.ai_errors)} "
+                                             "cues; the deterministic ranking was used for them.",
+                                             "\n".join(matcher.ai_errors[:10]))
+        log.info("Matching finished: %s", stats)
+        return stats
+
+    def rank_tracks_for_cue(self, cue_key: str) -> List[Dict[str, Any]]:
+        """Every usable track scored against one cue (for the manual picker)."""
+
+        model = self.game_model()
+        cue = next((c for c in model.cues if str(c.segment_id) == str(cue_key)), None) if model else None
+        if cue is None:
+            return []
+        store = self.semantic_store()
+        cue_eff = store.effective("cue", str(cue_key))
+        infos = track_infos(self.library_tracks(), store.effective_all("track"))
+        rows = []
+        for info in infos:
+            cand = score_candidate(cue, cue_eff.profile, info) if cue_eff else None
+            rows.append({"track": info, "candidate": cand})
+        rows.sort(key=lambda r: -(r["candidate"].score if r["candidate"] else -1))
+        return rows
+
+    def matching_rows(self, include_short: bool = False) -> List[Dict[str, Any]]:
+        model = self.game_model()
+        if model is None:
+            return []
+        matches = self.match_store()
+        proposals = matches.proposals()
+        decisions = matches.decisions()
+        skipped = matches.skipped()
+        rows = []
+        for cue in model.cues:
+            key = str(cue.segment_id)
+            if not include_short and self.is_short_cue(cue) and key not in decisions:
+                continue
+            decision = decisions.get(key)
+            props = proposals.get(key, [])
+            if decision is None:
+                status = "proposed" if props else "unmatched"
+            else:
+                status = {"accept": "accepted", "manual": "chosen", "reject": "rejected",
+                          "keep_original": "keep original"}[decision.action]
+            rows.append({"cue": cue, "key": key, "proposals": props, "decision": decision, "status": status,
+                         "skipped_reason": skipped.get(key, "")})
+        return rows
+
     # --------------------------------------------------------------- status
     def project_status(self) -> ProjectStatus:
         project = self.require_project()
@@ -513,7 +598,21 @@ class Studio:
             steps.append(WorkflowStep(5, "Analyze music", MISSING))
         if counts.get("missing"):
             status.warnings.append(f"{counts['missing']} previously scanned music files are no longer found.")
-        for number, title in ((6, "Generate thematic matches"), (7, "Review / override matches"), (8, "Build mod"),
-                              (9, "Validate output"), (10, "Export mod")):
+        matches = self.match_store()
+        run = matches.last_run()
+        if run is None:
+            steps.append(WorkflowStep(6, "Generate thematic matches", MISSING))
+        else:
+            steps.append(WorkflowStep(6, "Generate thematic matches", OK,
+                                      f"{run['stats'].get('proposed', 0)} cues have proposals ({run['created_at'][:16]})"))
+        counts = matches.status_counts()
+        chosen = counts["accepted"] + counts["manual"]
+        if chosen:
+            detail = f"{chosen} replacements confirmed, {counts['proposed']} proposals not reviewed"
+            steps.append(WorkflowStep(7, "Review / override matches", OK, detail))
+        else:
+            steps.append(WorkflowStep(7, "Review / override matches", MISSING if run is None else WARN,
+                                      "" if run is None else "No replacement confirmed yet."))
+        for number, title in ((8, "Build mod"), (9, "Validate output"), (10, "Export mod")):
             steps.append(WorkflowStep(number, title, UNAVAILABLE, "Not available in this version."))
         return status

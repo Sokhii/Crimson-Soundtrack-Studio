@@ -123,3 +123,34 @@ def test_ai_page_and_describe_music(app, window, tmp_path, analyzer_db):
     library = window.pages["library"]
     library.table.selectRow(0)
     assert "Dark and vast." in library.details.toPlainText() and library.edit_btn.isEnabled()
+
+
+def test_matching_page_review_flow(app, window, tmp_path, game, analyzer_db):
+    studio = window.studio
+    studio.import_analyzer(analyzer_db)
+    music = tmp_path / "Music"
+    for name, title, tone in (("a.flac", "Dark Requiem", 110), ("b.flac", "Village Dawn", 440)):
+        write_test_flac(music / name, seconds=45, bpm=None, tone_hz=tone, tags={"TITLE": title})
+    studio.set_library_path(music)
+    studio.scan_library()
+    window.nav.setCurrentRow(4)  # Matching
+    page = window.pages["matching"]
+    page.find_matches()
+    wait(app, window)
+    assert not window.errors
+    assert page.table.rowCount() == 3 and all(r["status"] == "proposed" for r in page.rows)
+    page.table.selectRow(0)
+    page.show_row(0)
+    assert "Replacement:" in page.details.toPlainText() and "Length:" in page.details.toPlainText()
+    page.accept_current()
+    assert page.rows[0]["status"] == "accepted"
+    page.table.selectRow(1)
+    page.show_row(1)
+    page.keep_current()
+    statuses = sorted(r["status"] for r in page.rows)
+    assert statuses == ["accepted", "keep original", "proposed"]
+    page.status_filter.setCurrentText("Accepted / chosen")
+    visible = [i for i in range(page.table.rowCount()) if not page.table.isRowHidden(i)]
+    assert len(visible) == 1
+    page.include_short.setChecked(True)
+    assert page.table.rowCount() == 4

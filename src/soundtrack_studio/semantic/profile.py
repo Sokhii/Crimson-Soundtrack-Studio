@@ -222,6 +222,8 @@ def similarity(a: SemanticProfile, b: SemanticProfile) -> Tuple[float, Dict[str,
         total_weight += 0.05
     if total_weight == 0:
         return 0.0, parts
+    # how much of the profiles could actually be compared (1.0 = every tag group and scale on both sides)
+    parts["coverage"] = round(total_weight / (sum(CATEGORY_WEIGHTS.values()) + sum(SCALE_WEIGHTS.values()) + 0.05), 3)
     return round(total / total_weight, 4), parts
 
 

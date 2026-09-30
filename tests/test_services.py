@@ -36,7 +36,7 @@ def test_phase1_workflow(tmp_path, studio, game, analyzer_db):
     studio.analyze_semantics(use_ai=False)
     s = studio.project_status()
     assert states(s)[5] == "ok"
-    assert all(states(s)[i] == "unavailable" for i in range(6, 11))
+    assert states(s)[6] == "missing" and states(s)[7] == "missing"  # matching not run yet
     assert not s.warnings
     assert fingerprint(root) == game_before and fingerprint(analyzer_db.parent) == db_before
 

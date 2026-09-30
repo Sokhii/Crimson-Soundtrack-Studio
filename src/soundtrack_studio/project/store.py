@@ -151,6 +151,41 @@ MIGRATIONS: List[tuple[int, str]] = [
         PRIMARY KEY (entity_type, entity_key)
     );
     """),
+    (3, """
+    CREATE TABLE match_run (
+        id INTEGER PRIMARY KEY,
+        created_at TEXT NOT NULL,
+        settings_json TEXT NOT NULL,
+        model_id TEXT NOT NULL DEFAULT '',
+        stats_json TEXT
+    );
+    -- machine proposals: recomputed by every matching run
+    CREATE TABLE match_proposal (
+        cue_key TEXT NOT NULL,               -- Wwise segment id
+        rank INTEGER NOT NULL,               -- 0 = proposed replacement, 1.. = alternatives
+        track_id INTEGER NOT NULL,
+        score REAL NOT NULL,
+        confidence REAL NOT NULL,
+        components_json TEXT,
+        reasons_json TEXT,
+        warnings_json TEXT,
+        ai_fit REAL,
+        ai_reason TEXT,
+        run_id INTEGER,
+        PRIMARY KEY (cue_key, rank)
+    );
+    -- the user's decisions: never touched by matching runs and always win
+    CREATE TABLE match_decision (
+        cue_key TEXT PRIMARY KEY,
+        action TEXT NOT NULL CHECK (action IN ('accept', 'manual', 'reject', 'keep_original')),
+        track_id INTEGER,
+        rejected_json TEXT,                  -- tracks the user rejected for this cue
+        fit_mode TEXT NOT NULL DEFAULT 'auto',   -- auto | trim | loop | pad
+        start_offset_s REAL NOT NULL DEFAULT 0,  -- where in the user's track playback starts
+        note TEXT,
+        updated_at TEXT NOT NULL
+    );
+    """),
 ]
 LATEST_VERSION = MIGRATIONS[-1][0]
 

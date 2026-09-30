@@ -23,6 +23,7 @@ from .ai_page import AIPage
 from .game_page import GameDataPage
 from .home_page import HomePage
 from .library_page import LibraryPage
+from .matching_page import MatchingPage
 from .widgets import STYLE, Dialogs, esc, show_error
 
 log = logging.getLogger(__name__)
@@ -132,11 +133,7 @@ class MainWindow(QMainWindow):
         self._add_page("game", "Game Data", GameDataPage(self))
         self._add_page("library", "Music Library", LibraryPage(self))
         self._add_page("ai", "AI Model", AIPage(self))
-        self._add_page("matching", "Matching", PlaceholderPage(
-            "Matching",
-            "Thematic matching arrives in a later version.<br><br>It will propose which of your tracks fits each "
-            "game cue by mood, atmosphere, energy, instrumentation and style (not by gameplay category), explain "
-            "why, and let you accept, reject or override every proposal. Your decisions always win over the AI."), False)
+        self._add_page("matching", "Matching", MatchingPage(self))
         self._add_page("build", "Build", PlaceholderPage(
             "Build",
             "Building the mod arrives in a later version.<br><br>The Studio will create a separate mod package for "
@@ -316,8 +313,9 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(f"{project.name} - {APP_DISPLAY_NAME}" if project else APP_DISPLAY_NAME)
         self.pages["home"].refresh()
         self.pages["library"].refresh()
-        if self.stack.currentWidget() is self.pages["ai"]:
-            self.pages["ai"].refresh()
+        for key in ("ai", "matching"):
+            if self.stack.currentWidget() is self.pages[key]:
+                self.pages[key].refresh()
         if reload_game_data:
             self.pages["game"].set_model(None)
             if self.stack.currentWidget() is self.pages["game"]:
