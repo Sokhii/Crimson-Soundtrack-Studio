@@ -168,7 +168,10 @@ def test_public_domain_recordings_report(ours, tmp_path):
     def s3(e):
         return float(np.mean([float(e @ vectors[a]) - float(e @ vectors[b]) for a, b in SIMPLE_PAIRS]))
 
-    strategies = {"S1 current": s1, "S2 genre-matched": s2, "S3 simple pairs": s3}
+    def shipped(e):            # what the app uses: descriptive prompts + 3 x simple pairs
+        return bank.vocal_margin(e)
+
+    strategies = {"SHIPPED combined": shipped, "S1 descriptive": s1, "S2 genre-matched": s2, "S3 simple pairs": s3}
     rows = []
     for item in samples:
         try:
@@ -182,7 +185,7 @@ def test_public_domain_recordings_report(ours, tmp_path):
         print(f"[{item['label']}] {item.get('title')} ({len(exc_emb)} excerpts): " + " | ".join(
             f"{name}: {[round(m, 3) for m in ms]}" for name, ms in margins.items()))
     for name in strategies:
-        for tv in (-0.03, -0.02, -0.01, 0.0, 0.01, 0.02, 0.03):
+        for tv in (-0.03, 0.0, 0.02, 0.03, 0.05, 0.07, 0.10):
             vok = vtot = iok = itot = jok = jtot = 0
             for item, margins in rows:
                 ms = margins[name]
@@ -200,6 +203,9 @@ def test_public_domain_recordings_report(ours, tmp_path):
                     iok += not sung
             print(f"TALLY {name} threshold {tv:+.2f}: vocals found {vok}/{vtot}, japanese marked sung {jok}/{jtot}, "
                   f"instrumentals kept {iok}/{itot}")
+            if name.startswith("SHIPPED") and abs(tv - 0.05) < 1e-9 and min(vtot, itot) >= 6:
+                # the detector the app ships must keep working on the freely licensed recordings (enough samples only)
+                assert vok / vtot >= 0.75 and iok / itot >= 0.75, (vok, vtot, iok, itot)
 
 
 def test_text_variants_diagnostics(model_dir, reference):

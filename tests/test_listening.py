@@ -7,7 +7,7 @@ import pytest
 
 from soundtrack_studio.listening.catalog import CLAP_MUSIC_SPEECH, listening_status
 from soundtrack_studio.listening.features import ClapFrontEnd, FrontEndConfig, mel_filter_bank
-from soundtrack_studio.listening.listen import (PromptBank, VOCAL_PROMPTS, INSTRUMENTAL_PROMPTS, all_prompts,
+from soundtrack_studio.listening.listen import (PromptBank, VOCAL_PAIRS, VOCAL_PROMPTS, INSTRUMENTAL_PROMPTS, all_prompts,
                                                 read_excerpts, sounds_alike)
 from soundtrack_studio.testing.fake_listening import install_fake_listening_model
 from soundtrack_studio.testing.fixtures import ANALYZER_FAKE_INSTALL_DB, extract_analyzer_fake_install, write_test_flac
@@ -65,15 +65,17 @@ def _towards(bank, prompts, strength=1.0, dim=64, seed=0):
 
 def test_vocals_are_judged_per_excerpt():
     bank = _bank()
-    vocal = [_towards(bank, VOCAL_PROMPTS, seed=i) for i in range(2)]
-    inst = [_towards(bank, INSTRUMENTAL_PROMPTS, seed=10 + i) for i in range(4)]
+    vocal_side = list(VOCAL_PROMPTS) + [a for a, _b in VOCAL_PAIRS]
+    instrumental_side = list(INSTRUMENTAL_PROMPTS) + [b for _a, b in VOCAL_PAIRS]
+    vocal = [_towards(bank, vocal_side, seed=i) for i in range(2)]
+    inst = [_towards(bank, instrumental_side, seed=10 + i) for i in range(4)]
     # a song whose singing is in 2 of 6 excerpts (intro, solos and outro are instrumental) has vocals
     song = {"embedding": inst[0], "excerpt_embeddings": inst + vocal}
     v = bank.vocals(song)
     assert v["vocals"] == "sung vocals" and v["vocals_excerpts"] == "2 of 6" and len(v["vocals_margins"]) == 6
     # ... even though its averaged fingerprint leans instrumental
     assert bank.vocals({"embedding": np.mean([np.array(e) for e in song["excerpt_embeddings"]], axis=0).tolist()})
-    # one stray excerpt out of six is not enough; with no excerpt close to singing it is instrumental
+    # one stray excerpt out of six is not enough (no claim); with no excerpt scoring as singing it is instrumental
     assert bank.vocals({"excerpt_embeddings": inst + inst[:1] + vocal[:1]})["vocals"] == "unclear"
     assert bank.vocals({"excerpt_embeddings": inst})["vocals"] == "instrumental"
     # older results (mean embedding only) still work
@@ -82,7 +84,7 @@ def test_vocals_are_judged_per_excerpt():
 
 def test_prompt_bank_summary_format():
     bank = _bank()
-    inst = _towards(bank, INSTRUMENTAL_PROMPTS)
+    inst = _towards(bank, list(INSTRUMENTAL_PROMPTS) + [b for _a, b in VOCAL_PAIRS])
     summary = bank.summary({"embedding": inst, "excerpt_embeddings": [inst, inst]})
     assert summary["vocals"] == "instrumental" and summary["vocals_margin"] < 0
     strings = _towards(bank, ["music featuring strings", "the sound of strings"], strength=3.0)

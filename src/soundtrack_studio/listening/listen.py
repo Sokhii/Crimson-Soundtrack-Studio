@@ -47,15 +47,24 @@ VOCAL_PROMPTS = ("a song with a singer singing lyrics", "music with sung vocals"
                  "a woman singing", "a man singing", "a pop song with a lead singer")
 INSTRUMENTAL_PROMPTS = ("instrumental music without vocals", "an instrumental piece with no singing",
                         "instrumental music")
-# Vocals are judged per ten-second excerpt: margin = mean cosine to the vocal prompts minus mean cosine to the
-# instrumental prompts. Averaging a whole song first hides singing behind intros, solos and dense arrangements.
-# A track has sung vocals when singing is clear in enough excerpts; it is instrumental only when no excerpt comes
-# close. Only embeddings are stored, so these can be re-tuned without listening again.
-VOCAL_MARGIN = 0.02                # an excerpt with singing
-INSTRUMENTAL_MARGIN = -0.01        # every excerpt below this: instrumental
+# Simple contrasting pairs: they catch modern and synthesized voices (Vocaloid, anime and J-pop vocals) that the
+# descriptive prompts above miss, but on their own they also fire on piano, jazz and old orchestral recordings.
+VOCAL_PAIRS = (("a song with vocals", "a song without vocals"), ("singing", "no singing"),
+               ("music with a singer", "music without a singer"))
+# Vocals are judged per ten-second excerpt with a combined score
+#     c = (mean cosine to VOCAL_PROMPTS - mean cosine to INSTRUMENTAL_PROMPTS)
+#         + PAIR_WEIGHT * mean over VOCAL_PAIRS of (cosine to the 'with' prompt - cosine to the 'without' prompt).
+# The two parts make different mistakes, so together they separate far better than either alone (fitted on 33
+# freely licensed recordings in CI, see docs/research/listening.md; 23/24 sung found, 8/9 instrumentals kept).
+# Averaging a whole song first hides singing behind intros, solos and dense arrangements, hence per excerpt.
+# A track has sung vocals when enough excerpts score above VOCAL_MARGIN; it is instrumental only when none do;
+# anything in between is "unclear" (no claim). Only embeddings are stored, so all of this can be re-tuned
+# without listening again.
+PAIR_WEIGHT = 3.0
+VOCAL_MARGIN = 0.05                # an excerpt with singing
 VOCAL_SHARE = 1 / 3              # share of excerpts that must have singing (at least one): 2 of 6
 STRONG_Z, MODERATE_Z, MAX_PER_FIELD = 1.6, 1.0, 3
-PROMPT_EMBED_VERSION = 3   # 3: fp16 text tower (identical to PyTorch); 2: int8 tower one prompt at a time
+PROMPT_EMBED_VERSION = 4   # 4: vocal pair prompts; 3: fp16 text tower (identical to PyTorch); 2: int8 tower one at a time
 
 
 def all_prompts() -> List[str]:
@@ -63,7 +72,8 @@ def all_prompts() -> List[str]:
     for category, terms in CATEGORIES.items():
         for term in terms:
             prompts += [t.format(term) for t in TEMPLATES[category]]
-    return list(dict.fromkeys(prompts + list(VOCAL_PROMPTS) + list(INSTRUMENTAL_PROMPTS)))
+    pair_prompts = [p for pair in VOCAL_PAIRS for p in pair]
+    return list(dict.fromkeys(prompts + list(VOCAL_PROMPTS) + list(INSTRUMENTAL_PROMPTS) + pair_prompts))
 
 
 @dataclass
@@ -159,7 +169,12 @@ class PromptBank:
         return float(np.mean([float(np.dot(emb, self.vectors[p])) for p in prompts]))
 
     def vocal_margin(self, emb: np.ndarray) -> float:
-        return self._score(emb, VOCAL_PROMPTS) - self._score(emb, INSTRUMENTAL_PROMPTS)
+        """Combined singing score of one excerpt (see VOCAL_PAIRS)."""
+
+        descriptive = self._score(emb, VOCAL_PROMPTS) - self._score(emb, INSTRUMENTAL_PROMPTS)
+        pairs = float(np.mean([float(np.dot(emb, self.vectors[a])) - float(np.dot(emb, self.vectors[b]))
+                               for a, b in VOCAL_PAIRS]))
+        return descriptive + PAIR_WEIGHT * pairs
 
     def vocals(self, result: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         """Vocals judged per excerpt (older results without excerpts: from the mean embedding)."""
@@ -199,7 +214,7 @@ def _vocal_decision(margins: List[float]) -> Dict[str, Any]:
     needed = max(1, int(np.ceil(VOCAL_SHARE * n - 1e-9)))
     if sung >= needed:
         verdict = "sung vocals"
-    elif max(margins) < INSTRUMENTAL_MARGIN:
+    elif sung == 0:
         verdict = "instrumental"
     else:
         verdict = "unclear"

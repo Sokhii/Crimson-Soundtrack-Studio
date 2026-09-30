@@ -37,11 +37,20 @@ Design: read through the Analyzer's archive records (ChaCha20/LZ4 as in the comp
 | llama.cpp can run audio-input models (Ultravox, Voxtral, Qwen2.5/3-Omni, Gemma 4), but those are large or speech-oriented; the user preferred a small music-specific model. | llama.cpp `docs/multimodal.md` | source-confirmed |
 | Essentia's voice/instrumental classifier is accurate but CC BY-NC-SA (non-commercial). | Essentia model documentation | community-reported; not used |
 
-Vocals: mean cosine to three "sung vocals" prompts minus three "instrumental" prompts; > 0.02 = sung vocals,
-< -0.01 = instrumental, otherwise unclear. On public-domain recordings from Wikimedia Commons (CI diagnostics,
-2026-09-30, with the text tower the app uses, identical to PyTorch): all six vocal recordings scored 0.048-0.204
-(sung vocals); all four instrumental pieces scored -0.162 to -0.299 (instrumental). Only embeddings are stored, so thresholds and prompts can be re-tuned
-without listening again.
+Vocals (what the app ships, fitted on freely licensed recordings in CI, 2026-09-30): each ten-second excerpt gets
+c = (mean cosine to six "sung" prompts - mean cosine to three "instrumental" prompts) + 3 x the mean of three
+contrasting pairs ("a song with vocals" / "a song without vocals", "singing" / "no singing", "music with a singer" /
+"music without a singer"). An excerpt with c > 0.05 counts as singing; a track is "sung vocals" when a third of its
+excerpts do, "instrumental" when none do, otherwise "unclear" (no claim). Averaging a whole song first, and the
+descriptive prompts alone, were the earlier versions: they missed modern synthesized voices (Vocaloid: all six
+excerpts on the instrumental side) and, in the reported case, an anime song with obvious vocals. The pairs alone
+find nearly every voice but also fire on piano, jazz and old orchestral recordings; the two parts make different
+mistakes, so the sum separates best (33 recordings: 23 of 24 sung files found, including Vocaloid, AI-made songs,
+Japanese songs and a modern Japanese vocal track; 8 of 9 instrumentals kept; the exception is a 1924 jazz orchestra
+recording; Scott Joplin's 1916 ragtime is "unclear"). The recordings are few and mostly older or AI-made, so the cut-off
+is provisional; `CrimsonSoundtrackStudio.exe --listen-file FILE` prints the per-excerpt scores of any file so
+it can be checked against real music. Only embeddings are stored, so prompts and cut-offs can be re-tuned without
+listening again.
 
 Why embeddings plus zero-shot tags instead of free text: the profile vocabulary is fixed, CLAP scores exactly those
 words, results are reproducible, and "sounds alike" (embedding similarity) is available for matching at no extra
