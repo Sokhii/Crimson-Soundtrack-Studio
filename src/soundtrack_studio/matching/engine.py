@@ -44,6 +44,7 @@ class MatchSettings:
     reuse_penalty: float = 0.06          # score subtracted per earlier use of the same track
     use_ai: bool = False
     use_sound: bool = True               # compare the audio itself when the listening model heard both sides
+    mode: str = "standout"               # "standout" = compare standout scores (new) | "legacy" = tag overlap
     alternatives: int = SHORTLIST - 1
 
     def to_dict(self) -> Dict[str, Any]:
@@ -59,6 +60,10 @@ class TrackInfo:
     tempo_bpm: Optional[float]
     profile: SemanticProfile
     embedding: Any = None                # listening-model audio embedding (normalised numpy vector) or None
+    standout: Any = None                 # standout vector (``Calibration.standout_vector``) or None
+
+
+STANDOUT_FULL = 0.6     # cosine of two standout vectors that counts as a complete match
 
 
 @dataclass
@@ -137,6 +142,25 @@ def explain(cue_p: SemanticProfile, track_p: SemanticProfile, parts: Dict[str, f
     return reasons
 
 
+def explain_standouts(calibration: Any, cue_vec: Any, track_vec: Any, components: Dict[str, float]) -> List[str]:
+    """Reasons for a standout-score match: the words that stand out for both, and strong cue words the track lacks."""
+
+    import numpy as np
+
+    _sim, shared = calibration.standout_similarity(cue_vec, track_vec)
+    reasons = [f"Standout match {components.get('standout_cosine', 0):.2f}: " + ", ".join(
+        f"{word} ({a} vs {b})" for _c, word, a, b in shared[:5])] if shared else [
+        f"Little in common that stands out (standout match {components.get('standout_cosine', 0):.2f})"]
+    from ..listening.calibration import phi_score, STANDOUT_Z_FLOOR
+
+    missing = [i for i in np.argsort(-cue_vec)[:6] if cue_vec[i] > 1.0 and track_vec[i] <= 0.0]
+    if missing:
+        scores = phi_score(cue_vec + STANDOUT_Z_FLOOR)
+        reasons.append("Stands out in the game music but not in the track: " + ", ".join(
+            f"{calibration.words[i][1]} ({int(round(scores[i]))})" for i in missing[:3]))
+    return reasons
+
+
 def confidence(score: float, cue_p: SemanticProfile, track_p: SemanticProfile, margin: float,
                coverage: float = 1.0) -> float:
     """How much to trust a proposal: match quality × evidence quality × comparability × clear winner."""
@@ -152,13 +176,18 @@ def confidence_label(value: float) -> str:
 
 
 def score_candidate(cue: MusicCue, cue_p: SemanticProfile, track: TrackInfo, explain_now: bool = True,
-                    alike: Optional[Tuple[float, float]] = None) -> Optional[Candidate]:
-    """``alike`` = (audio cosine similarity, its rank among the library for this cue: 1.0 = most alike)."""
+                    alike: Optional[Tuple[float, float]] = None, standout_cos: Optional[float] = None,
+                    standout_ctx: Any = None) -> Optional[Candidate]:
+    """``alike`` = (audio cosine similarity, its rank among the library for this cue: 1.0 = most alike);
+    ``standout_cos`` = cosine of the cue's and the track's standout vectors (None = legacy tag matching)."""
 
     cue_s = (cue.duration_ms or 0) / 1000
     if cue_s and track.duration_s < cue_s * MIN_DURATION_RATIO:
         return None
-    raw_sem, parts = similarity(cue_p, track.profile)
+    standout = None if standout_cos is None else max(0.0, min(1.0, standout_cos / STANDOUT_FULL))
+    raw_sem, parts = similarity(cue_p, track.profile, standout)
+    if standout_cos is not None:
+        parts["standout_cosine"] = round(standout_cos, 3)
     coverage = parts.get("coverage", 0.0)
     # agreement on one attribute is weak evidence: shrink towards neutral when little could be compared
     sem = round(0.5 + (raw_sem - 0.5) * (0.35 + 0.65 * coverage), 4) if parts else 0.0
@@ -174,18 +203,27 @@ def score_candidate(cue: MusicCue, cue_p: SemanticProfile, track: TrackInfo, exp
         score = 0.78 * sem + 0.17 * dfit + tempo_part
     cand = Candidate(track.id, round(score, 4), sem, dfit, tfit, components, [], [], 0.0)
     if explain_now:
-        add_explanations(cand, cue, cue_p, track)
+        add_explanations(cand, cue, cue_p, track, standout_ctx)
     return cand
 
 
-def add_explanations(cand: Candidate, cue: MusicCue, cue_p: SemanticProfile, track: TrackInfo) -> None:
-    """Reasons and warnings (only built for candidates that will be shown)."""
+def add_explanations(cand: Candidate, cue: MusicCue, cue_p: SemanticProfile, track: TrackInfo,
+                     standout_ctx: Any = None) -> None:
+    """Reasons and warnings (only built for candidates that will be shown). ``standout_ctx`` =
+    (Calibration, cue standout vector) when the candidate was scored by standout scores."""
 
     if cand.reasons or cand.warnings:
         return
     cue_s = (cue.duration_ms or 0) / 1000
     _dfit, how = duration_fit(track.duration_s, cue_s)
-    reasons = explain(cue_p, track.profile, cand.components)
+    if standout_ctx is not None and track.standout is not None and "standout" in cand.components:
+        reasons = explain_standouts(standout_ctx[0], standout_ctx[1], track.standout, cand.components)
+        reasons += [r for r in explain(cue_p, track.profile, {k: v for k, v in cand.components.items()
+                                                              if k not in CATEGORIES}) if r.startswith(("Similar", "Different", "Vocals"))]
+    else:
+        reasons = explain(cue_p, track.profile, cand.components)
+        if standout_ctx is None and "standout" not in cand.components:
+            reasons.insert(0, "Matched by tags (legacy matching)")
     rank = cand.components.get("sounds_alike_rank")
     if rank is not None:
         if rank >= 0.8:
@@ -214,9 +252,12 @@ class Matcher:
                  settings: MatchSettings, *, rejected: Optional[Dict[str, Set[int]]] = None,
                  fixed: Optional[Dict[str, Optional[int]]] = None, backend: Optional[InferenceBackend] = None,
                  cue_docs: Optional[Dict[str, Dict[str, Any]]] = None,
-                 cue_embeddings: Optional[Dict[str, Any]] = None) -> None:
+                 cue_embeddings: Optional[Dict[str, Any]] = None,
+                 cue_standouts: Optional[Dict[str, Any]] = None, calibration: Any = None) -> None:
         self.model = model
         self.cue_embeddings = cue_embeddings or {}
+        self.cue_standouts = (cue_standouts or {}) if settings.mode == "standout" else {}
+        self.calibration = calibration
         self.cue_profiles = cue_profiles
         self.tracks = {t.id: t for t in tracks}
         self.settings = settings
@@ -246,16 +287,19 @@ class Matcher:
                 continue
             candidates = []
             alike = self._alike(key)
+            standout = self._standout(key)
             for track in self.tracks.values():
                 if track.id in self.rejected.get(key, ()):
                     continue
-                cand = score_candidate(cue, eff.profile, track, explain_now=False, alike=alike.get(track.id))
+                cand = score_candidate(cue, eff.profile, track, explain_now=False, alike=alike.get(track.id),
+                                       standout_cos=standout.get(track.id))
                 if cand is not None:
                     candidates.append(cand)
             candidates.sort(key=lambda c: (-c.score, c.track_id))
             ranked[key] = candidates[: max(SHORTLIST, self.settings.alternatives + 1) * 3]
+            ctx = (self.calibration, self.cue_standouts[key]) if key in self.cue_standouts and self.calibration else None
             for cand in ranked[key]:
-                add_explanations(cand, cue, eff.profile, self.tracks[cand.track_id])
+                add_explanations(cand, cue, eff.profile, self.tracks[cand.track_id], ctx)
             results[key] = CueResult(key)
             if not candidates:
                 results[key].skipped_reason = "No track in your library is long enough or described."
@@ -266,6 +310,22 @@ class Matcher:
         if progress:
             progress("Comparing music", len(cues), len(cues))
         return results
+
+    def _standout(self, key: str) -> Dict[int, float]:
+        """Cosine of the cue's standout vector with every track's (empty = legacy tag matching for this cue)."""
+
+        import numpy as np
+
+        cue_vec = self.cue_standouts.get(key)
+        tracks = [t for t in self.tracks.values() if t.standout is not None]
+        if cue_vec is None or not tracks or float(np.linalg.norm(cue_vec)) < 1e-6:
+            return {}
+        matrix = np.stack([t.standout for t in tracks])
+        if matrix.shape[1] != len(cue_vec):
+            return {}
+        norms = np.maximum(np.linalg.norm(matrix, axis=1), 1e-6)
+        cos = (matrix @ cue_vec) / (norms * float(np.linalg.norm(cue_vec)))
+        return {t.id: float(cos[i]) for i, t in enumerate(tracks) if norms[i] > 1e-5}
 
     def _alike(self, key: str) -> Dict[int, Tuple[float, float]]:
         """Audio similarity of every heard track to this cue: {track id: (cosine, rank 0..1)}."""
@@ -357,8 +417,9 @@ class Matcher:
 
 
 def track_infos(tracks: Iterable[Dict[str, Any]], profiles: Dict[str, EffectiveProfile],
-                embeddings: Optional[Dict[int, Any]] = None) -> List[TrackInfo]:
+                embeddings: Optional[Dict[int, Any]] = None, standouts: Optional[Dict[int, Any]] = None) -> List[TrackInfo]:
     embeddings = embeddings or {}
+    standouts = standouts or {}
     out = []
     for t in tracks:
         if t["status"] != "ok" or t.get("duplicate_of"):
@@ -368,5 +429,6 @@ def track_infos(tracks: Iterable[Dict[str, Any]], profiles: Dict[str, EffectiveP
             continue
         label = " – ".join(x for x in (t.get("artist"), t.get("title") or t["rel_path"].rsplit("/", 1)[-1]) if x)
         out.append(TrackInfo(t["id"], label, float(t["duration_s"]), int(t.get("channels") or 2),
-                             (t.get("features") or {}).get("tempo_bpm"), eff.profile, embeddings.get(t["id"])))
+                             (t.get("features") or {}).get("tempo_bpm"), eff.profile, embeddings.get(t["id"]),
+                             standouts.get(t["id"])))
     return out

@@ -228,3 +228,22 @@ def test_listening_model_panel_and_game_audio_buttons(app, window, tmp_path, mon
     page.show_current()
     html = page.details.toHtml()
     assert "Measured from the game audio" in html and "Heard by the listening model" in html
+
+
+def test_matching_page_toggle_switches_between_standout_and_legacy(app, window, tmp_path, monkeypatch):
+    pytest.importorskip("onnxruntime")
+    pytest.importorskip("onnx")
+    from soundtrack_studio.testing.fake_listening import install_fake_listening_model
+
+    studio = window.studio
+    page = window.pages["matching"]
+    page.refresh()
+    assert page.standout.isChecked() and not page.standout.isEnabled()          # no listening model: legacy only
+    install_fake_listening_model(studio)
+    studio.select_listening_model("clap-larger-music-speech")
+    page.refresh()
+    assert page.standout.isEnabled() and page.standout.isChecked()
+    page.standout.setChecked(False)
+    assert studio.settings.matching_mode == "legacy"
+    page.standout.setChecked(True)
+    assert studio.settings.matching_mode == "standout"

@@ -158,10 +158,25 @@ account name are redacted, music tags are not logged; `logs/crash.log` receives 
   unchanged evidence keep their cache keys. The text model is told that heard evidence beats names and tags, and
   vocal presence comes from listening (or clear tags), never from genre or album type.
 
+## Calibrated scores and standout matching
+
+`listening/calibration.py` turns the model's raw word similarities into 0-100 scores. Each of ~340 words
+(`listening/vocabulary.py`: mood, emotion, atmosphere, instrumentation, style, rhythm, texture) is judged against
+every piece analysed (the user's tracks plus the game's music): z = (similarity - word mean) / word spread,
+score = 100 x Phi(z). Words that fit every piece average 50 and stop appearing; tags are shown from 85; words whose
+spread is under 40% of the median are skipped; with fewer than 30 pieces the scores are relative to the piece's own
+other words and flagged provisional. The profile vocabulary the text model writes from (92 words) is unchanged; heard
+words outside it become themes. Standout matching compares each piece's *standout vector* (z above 0.5, capped at 3,
+zero elsewhere) by cosine (a cosine of 0.6 counts as a complete match) and explains the match with the words that
+stand out for both and strong cue words the track lacks. `Match by standout scores` (setting `matching_mode`) switches
+between this and the legacy tag overlap; without the listening model the legacy matching is always used. Accepted,
+rejected and chosen tracks are never changed by either mode.
+
 ## Matching
 
 Unit: the MusicSegment (see `docs/research/modding_format.md`). Deterministic eligibility and filtering,
-coverage-aware semantic similarity (agreement on few attributes is weak evidence), "sounds alike" when the
+coverage-aware semantic similarity (agreement on few attributes is weak evidence; with the listening model the tag
+overlap is replaced by standout-score similarity, see below, unless the user switches to legacy matching), "sounds alike" when the
 listening model heard both sides (rank of the audio-embedding similarity within the library), duration and tempo fit,
 optional local-AI judgement of the top five only, then a diversity-aware assignment with a reuse limit.
 Every proposal carries reasons, warnings and a confidence that accounts for evidence quality. Only cues the

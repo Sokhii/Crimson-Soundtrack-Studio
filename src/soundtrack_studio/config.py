@@ -35,6 +35,7 @@ class Settings:
     vgmstream_path: str = ""                  # empty = bundled runtime/vgmstream/
     listening_model_id: str = ""              # optional listening model (CLAP); "" = off
     listening_device: str = "auto"            # auto (GPU when available) | cpu
+    matching_mode: str = "standout"           # "standout" = compare standout scores | "legacy" = tag matching
     window_geometry: str = ""                 # hex-encoded QByteArray
     extra: Dict[str, Any] = field(default_factory=dict)
 

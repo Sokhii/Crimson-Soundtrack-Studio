@@ -93,13 +93,22 @@ class MatchingPage(QWidget):
         self.use_sound.setChecked(True)
         self.use_sound.setToolTip("When the listening model has heard both a game cue and your tracks, how much a "
                                   "track sounds like the original counts towards the match.")
+        self.standout = QCheckBox("Match by standout scores")
+        self.standout.setChecked(host.studio.settings.matching_mode != "legacy")
+        self.standout.setToolTip(
+            "On: compares what stands out most about each game cue and each track (0-100 scores from the listening "
+            "model), so distinctive qualities count and generic ones do not.\nOff: legacy matching, which compares "
+            "each piece's top tags from the description. Needs the listening model; without it the legacy "
+            "matching is always used.")
+        self.standout.toggled.connect(self._standout_toggled)
         self.allow_reuse = QCheckBox("Allow a track for several cues")
         self.allow_reuse.setChecked(True)
         self.include_short = QCheckBox("Include short/transition cues")
         self.include_short.toggled.connect(lambda _v: self.refresh())
         self.accept_all_btn = QPushButton("Accept all high-confidence")
         self.accept_all_btn.clicked.connect(self.accept_all)
-        for w in (self.describe_btn, self.match_btn, self.use_ai, self.use_sound, self.allow_reuse, self.include_short):
+        for w in (self.describe_btn, self.match_btn, self.use_ai, self.standout, self.use_sound, self.allow_reuse,
+                  self.include_short):
             bar.addWidget(w)
         bar.addStretch(1)
         bar.addWidget(self.accept_all_btn)
@@ -174,7 +183,11 @@ class MatchingPage(QWidget):
         has_data = studio.project is not None and studio.project.active_analyzer() is not None
         for w in (self.describe_btn, self.match_btn, self.accept_all_btn):
             w.setEnabled(has_data)
-        self.use_sound.setEnabled(studio.active_listening_model() is not None)
+        listening = studio.active_listening_model() is not None
+        self.use_sound.setEnabled(listening)
+        self.standout.setEnabled(listening)
+        self.standout.setToolTip(self.standout.toolTip().split("\n\n[")[0] + ("" if listening else
+                                 "\n\n[Turn on the listening model on the AI Model page to use standout scores.]"))
         self.use_ai.setEnabled(studio.active_model() is not None)
         if not self.use_ai.isEnabled():
             self.use_ai.setChecked(False)
@@ -370,15 +383,23 @@ class MatchingPage(QWidget):
             self._after()
             self.host.info("Accept proposals", f"{count} proposals accepted.")
 
+    def _standout_toggled(self, checked: bool) -> None:
+        studio = self.host.studio
+        studio.settings.matching_mode = "standout" if checked else "legacy"
+        studio.settings.save(studio.paths)
+
     def find_matches(self) -> None:
-        settings = MatchSettings(include_short_cues=self.include_short.isChecked(),
+        settings = MatchSettings(mode="standout" if self.standout.isChecked() else "legacy",
+                                 include_short_cues=self.include_short.isChecked(),
                                  allow_reuse=self.allow_reuse.isChecked(), use_ai=self.use_ai.isChecked(),
                                  use_sound=self.use_sound.isChecked())
 
         def done(stats) -> None:
             self._after()
+            how = ("by standout scores" if stats.get("mode") == "standout" else "by tags (legacy matching)")
             self.host.statusBar().showMessage(
-                f"Matching finished: {stats['proposed']} cues have a proposal, {stats['unmatched']} have none.", 15000)
+                f"Matching finished {how}: {stats['proposed']} cues have a proposal, {stats['unmatched']} have none.",
+                15000)
 
         self.host.run_job("Finding matches", lambda report, cancelled: self.host.studio.find_matches(
             settings, report, cancelled), on_done=done)

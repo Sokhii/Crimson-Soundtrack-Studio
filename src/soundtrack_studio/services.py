@@ -868,8 +868,12 @@ class Studio:
             self.analyze_semantics(use_ai=False, progress=progress, cancel=cancel)
             track_profiles = store.effective_all("track")
             cue_profiles = store.effective_all("cue")
-        track_emb, cue_emb = self.sound_embeddings(model) if settings.use_sound else ({}, {})
-        infos = track_infos(tracks, track_profiles, track_emb)
+        use_standout = settings.mode == "standout" and self.active_listening_model() is not None
+        track_emb, cue_emb = self.sound_embeddings(model) if (settings.use_sound or use_standout) else ({}, {})
+        calibration = self.calibration() if use_standout else None
+        track_standouts = {tid: calibration.standout_vector(e) for tid, e in track_emb.items()} if calibration else {}
+        cue_standouts = {k: calibration.standout_vector(e) for k, e in cue_emb.items()} if calibration else {}
+        infos = track_infos(tracks, track_profiles, track_emb if settings.use_sound else {}, track_standouts)
         backend = self.backend() if settings.use_ai else None
         if backend is not None:
             if progress:
@@ -878,12 +882,17 @@ class Studio:
         cue_docs = {str(c.segment_id): cue_document(model, c) for c in model.cues} if backend else {}
         matches = self.match_store()
         matcher = Matcher(model, cue_profiles, infos, settings, rejected=matches.rejected_map(),
-                          fixed=matches.fixed_map(), backend=backend, cue_docs=cue_docs, cue_embeddings=cue_emb)
+                          fixed=matches.fixed_map(), backend=backend, cue_docs=cue_docs,
+                          cue_embeddings=cue_emb if settings.use_sound else {}, cue_standouts=cue_standouts,
+                          calibration=calibration)
         results = matcher.run(progress, cancel)
         stats = {"cues": len(results), "proposed": sum(1 for r in results.values() if r.candidates),
                  "unmatched": sum(1 for r in results.values() if not r.candidates), "tracks": len(infos),
                  "ai_errors": len(matcher.ai_errors),
-                 "compared_by_sound": sum(1 for k in cue_emb if k in results) if len(track_emb) >= 2 else 0}
+                 "compared_by_sound": (sum(1 for k in cue_emb if k in results) if len(track_emb) >= 2 else 0)
+                 if settings.use_sound else 0,
+                 "compared_by_standout": sum(1 for k in cue_standouts if k in results) if track_standouts else 0,
+                 "mode": "standout" if (cue_standouts and track_standouts) else "legacy"}
         matches.save_run(results, settings, backend.model_id if backend else "", stats)
         if matcher.ai_errors:
             self.require_project().add_event("warning", "ai", f"The local AI could not judge {len(matcher.ai_errors)} "

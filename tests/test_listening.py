@@ -283,3 +283,59 @@ def test_standout_similarity_rewards_shared_standouts():
     s_other, _ = cal.standout_similarity(cue, other)
     assert s_same > s_other + 0.2 and any(w == "harp" for _c, w, _a, _b in why)
     assert all(0 <= x <= 100 for _c, _w, a, b in why for x in (a, b))
+
+
+# ------------------------------------------------------------------ standout matching + legacy toggle
+def _reasons(studio):
+    out = []
+    for row in studio.matching_rows(include_short=False):
+        for prop in row["proposals"]:
+            reasons = prop.get("reasons") if isinstance(prop, dict) else getattr(prop, "reasons", [])
+            out += list(reasons or [])
+    return out
+
+
+def test_matching_modes_standout_and_legacy(listening_studio, tmp_path, monkeypatch):
+    from test_game_audio import _fake_decoder
+
+    from soundtrack_studio.matching.engine import MatchSettings
+
+    s = listening_studio
+    game = extract_analyzer_fake_install(tmp_path / "Crimson Desert")
+    s.import_analyzer(ANALYZER_FAKE_INSTALL_DB)
+    s.set_game_path(game)
+    monkeypatch.setenv("CSS_VGMSTREAM", str(_fake_decoder(tmp_path)))
+    s.select_listening_model(CLAP_MUSIC_SPEECH.id)
+    s.analyze_semantics(use_ai=False)                               # decodes + listens to both sides
+    standout = s.find_matches(MatchSettings(mode="standout"))
+    assert standout["mode"] == "standout" and standout["compared_by_standout"] >= 1 and standout["proposed"] >= 1
+    reasons = _reasons(s)
+    assert any(r.startswith("Standout match") or r.startswith("Little in common") for r in reasons), reasons
+    assert not any("legacy matching" in r for r in reasons)
+    legacy = s.find_matches(MatchSettings(mode="legacy"))
+    assert legacy["mode"] == "legacy" and legacy["compared_by_standout"] == 0 and legacy["proposed"] >= 1
+    reasons = _reasons(s)
+    assert any("legacy matching" in r for r in reasons) and not any(r.startswith("Standout match") for r in reasons)
+    # without the listening model the legacy matching is used whatever the setting says
+    s.select_listening_model("")
+    assert s.find_matches(MatchSettings(mode="standout"))["mode"] == "legacy"
+
+
+def test_user_decisions_survive_a_mode_switch(listening_studio, tmp_path, monkeypatch):
+    from test_game_audio import _fake_decoder
+
+    from soundtrack_studio.matching.engine import MatchSettings
+
+    s = listening_studio
+    s.import_analyzer(ANALYZER_FAKE_INSTALL_DB)
+    s.set_game_path(extract_analyzer_fake_install(tmp_path / "Crimson Desert"))
+    monkeypatch.setenv("CSS_VGMSTREAM", str(_fake_decoder(tmp_path)))
+    s.select_listening_model(CLAP_MUSIC_SPEECH.id)
+    s.analyze_semantics(use_ai=False)
+    s.find_matches(MatchSettings(mode="standout"))
+    track = next(iter(s.track_listening()))
+    s.match_store().choose("2001", track)
+    s.find_matches(MatchSettings(mode="legacy"))
+    s.find_matches(MatchSettings(mode="standout"))
+    assert s.match_store().final_mapping()[0].cue_key == "2001"
+    assert any(m.track_id == track for m in s.match_store().final_mapping() if m.cue_key == "2001")

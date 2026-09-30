@@ -14,7 +14,7 @@ Crimson Desert ──► Crimson Desert Analyzer ──► Analyzer SQLite DB �
                                                       your music library   local AI (llama.cpp)
 ```
 
-> **Status: 0.10 (feature-complete beta).** The whole workflow works end to end: project → game → Analyzer
+> **Status: 0.11 (feature-complete beta).** The whole workflow works end to end: project → game → Analyzer
 > database → music library → local AI (optional) → thematic matching → review → build → validated mod
 > package. **It has not yet been verified in the game itself** (the development environment has no game
 > install). Please report results, including which package layout your mod manager imports (see
@@ -32,7 +32,8 @@ Crimson Desert ──► Crimson Desert Analyzer ──► Analyzer SQLite DB �
    by SHA-256 and runs locally through the bundled llama.cpp runtime; nothing else to install. Without a
    model, rule-based descriptions are used.
    **Listening model (optional, alongside)**: CLAP listens to the audio itself (your tracks and the game's music)
-   and recognises instruments, vocals, mood and style, and how much two pieces sound alike. It runs on the
+   and recognises instruments, vocals, mood, style, rhythm and recording texture (about 340 words, each scored
+   0-100 against all the music analysed), and how much two pieces sound alike. It runs on the
    graphics card via DirectML (any DirectX 12 GPU) or on the CPU, and adds its findings to the descriptions and to
    matching; it replaces nothing.
 6. **Describe music**: the game's music is first decoded **read-only** (with the bundled vgmstream, into the
@@ -42,8 +43,10 @@ Crimson Desert ──► Crimson Desert Analyzer ──► Analyzer SQLite DB �
    community notes, measurements and what was heard. Vocals are only judged from listening or clear tags. Results
    are cached and shared by all projects. You can edit any description; your edits always win.
 7. **Find matches**: proposals by musical character, not gameplay category, with reasons, warnings and a
-   calibrated confidence. When the listening model heard both sides, how much a track *sounds like* the original
-   counts too. Optionally the local AI judges the top five candidates per cue.
+   calibrated confidence. With the listening model on, pieces are compared by what *stands out* about each one
+   (0-100 scores per word, relative to all the music analysed, so words that fit everything stop counting) and by
+   how much a track *sounds like* the original. "Match by standout scores" on the Matching page switches back to
+   the legacy tag-overlap matching at any time. Optionally the local AI judges the top five candidates per cue.
 8. **Review**: accept, reject, choose another track, keep the original, set the fit mode (trim / loop / play
    once) and a start offset. Only what you accept or choose is built; re-running matching never changes your
    decisions.

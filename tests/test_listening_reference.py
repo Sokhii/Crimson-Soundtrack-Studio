@@ -233,3 +233,45 @@ def test_text_variants_diagnostics(model_dir, reference):
         for how, emb in (("batched", batch), ("one at a time", single)):
             cos = np.sum(emb * ref, axis=1)
             print(f"text {name} {how}: min {cos.min():.4f} mean {cos.mean():.4f}")
+
+
+def test_tag_repetition_before_and_after_calibration(ours):
+    """The repetition complaint, measured: how often the same words are tagged across unrelated recordings,
+    with scores relative to the piece's own words (before) and relative to all the music analysed (after)."""
+
+    from collections import Counter
+
+    from soundtrack_studio.listening.calibration import MIN_REFERENCE, Calibration
+    from soundtrack_studio.listening.listen import PromptBank, all_prompts, embedding_of, listen_file
+
+    samples = json.loads(os.environ.get("CSS_CLAP_SAMPLES", "[]"))
+    if len(samples) < 12:
+        pytest.skip("not enough sample recordings downloaded")
+    prompts = all_prompts()
+    bank = PromptBank(dict(zip(prompts, ours.embed_text(prompts))))
+    embs = []
+    for item in samples:
+        try:
+            embs.append(embedding_of(listen_file(ours, Path(item["path"]), "reference")))
+        except Exception:  # noqa: BLE001 - unreadable sample
+            continue
+    embs = [e for e in embs if e is not None]
+    if len(embs) < 12:
+        pytest.skip("too few readable recordings")
+    before = Calibration(bank)                      # no reference: ranks within each piece
+    after = Calibration(bank, embs * (1 if len(embs) >= MIN_REFERENCE else -(-MIN_REFERENCE // len(embs))))
+
+    def shares(cal):
+        counter = Counter()
+        for e in embs:
+            for group, words in cal.tags(e).items():
+                counter.update(f"{group}:{w}" for w in words)
+        top = counter.most_common(6)
+        return [(w, round(n / len(embs), 2)) for w, n in top], (top[0][1] / len(embs) if top else 0.0), \
+            sum(counter.values()) / len(embs)
+
+    top_b, max_b, per_b = shares(before)
+    top_a, max_a, per_a = shares(after)
+    print(f"TAGS before calibration: {per_b:.1f} tags per piece; most repeated {top_b}")
+    print(f"TAGS after calibration:  {per_a:.1f} tags per piece; most repeated {top_a}")
+    assert max_a <= max_b + 1e-9, (max_a, max_b)       # calibration never makes one word dominate more

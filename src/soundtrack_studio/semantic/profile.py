@@ -202,18 +202,28 @@ def _set_similarity(a: Iterable[str], b: Iterable[str]) -> Optional[float]:
     return score / (len(a_set) + len(b_set))
 
 
-def similarity(a: SemanticProfile, b: SemanticProfile) -> Tuple[float, Dict[str, float]]:
-    """0..1 similarity plus per-component scores (components missing on either side are skipped)."""
+def similarity(a: SemanticProfile, b: SemanticProfile,
+               standout: Optional[float] = None) -> Tuple[float, Dict[str, float]]:
+    """0..1 similarity plus per-component scores (components missing on either side are skipped).
+
+    ``standout`` (0..1, from the listening model's standout scores) replaces the tag-overlap part with the same
+    total weight; ``None`` is the legacy tag matching."""
 
     parts: Dict[str, float] = {}
     total_weight = 0.0
     total = 0.0
-    for category, weight in CATEGORY_WEIGHTS.items():
-        s = _set_similarity(getattr(a, category), getattr(b, category))
-        if s is not None:
-            parts[category] = round(s, 3)
-            total += weight * s
-            total_weight += weight
+    if standout is not None:
+        weight = sum(CATEGORY_WEIGHTS.values())
+        parts["standout"] = round(standout, 3)
+        total += weight * standout
+        total_weight += weight
+    else:
+        for category, weight in CATEGORY_WEIGHTS.items():
+            s = _set_similarity(getattr(a, category), getattr(b, category))
+            if s is not None:
+                parts[category] = round(s, 3)
+                total += weight * s
+                total_weight += weight
     for scale, weight in SCALE_WEIGHTS.items():
         x, y = getattr(a, scale), getattr(b, scale)
         if x is not None and y is not None:
