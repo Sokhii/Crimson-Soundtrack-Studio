@@ -8,6 +8,8 @@ Crimson Soundtrack Studio is MIT-licensed (see `LICENSE`). The portable build bu
 | [Qt for Python (PySide6)](https://www.qt.io/qt-for-python) / Qt 6 | LGPL-3.0 | GUI; shipped as separate, replaceable shared libraries in the one-folder build |
 | [NumPy](https://numpy.org/) | BSD-3-Clause | signal analysis |
 | [python-soundfile](https://github.com/bastibe/python-soundfile) | BSD-3-Clause | audio decoding |
+| [cryptography](https://cryptography.io/) | Apache-2.0 / BSD-3-Clause | ChaCha20 decryption when reading original soundbanks |
+| [python-lz4](https://github.com/python-lz4/python-lz4) | BSD-3-Clause | LZ4 decompression of game archive entries |
 | [libsndfile](https://libsndfile.github.io/libsndfile/) (bundled by soundfile, with FLAC/Ogg/Vorbis/Opus) | LGPL-2.1 (FLAC/Ogg/Vorbis: BSD-style) | audio decoding; shipped as a separate shared library |
 
 No GPL-licensed code is bundled. FLAC metadata is read by the Studio's own parser

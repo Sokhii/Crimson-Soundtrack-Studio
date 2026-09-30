@@ -9,6 +9,8 @@ dependencies = [
     "PySide6-Essentials>=6.7,<7",
     "numpy>=1.26",
     "soundfile>=0.12",
+    "cryptography>=42",
+    "lz4>=4.3",
 ]
 
 [project.scripts]
@@ -25,7 +27,7 @@ version = { attr = "soundtrack_studio.__version__" }
 where = ["src"]
 
 [tool.setuptools.package-data]
-soundtrack_studio = ["testing/*.sql", "resources/*.json"]
+soundtrack_studio = ["testing/*.sql", "testing/*.zip", "testing/*.sqlite3", "resources/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

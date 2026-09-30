@@ -29,6 +29,7 @@ from .game_model.model import GameMusicModel
 from .library.cache import AnalysisCache
 from .library.scanner import LibraryScanner, ScanProgress, ScanStats
 from .project.store import Project, ProjectInfo, list_projects, now_iso
+from .compiler.build import BuildResult, BuildSettings, ModBuilder
 from .matching.engine import Matcher, MatchSettings, score_candidate, track_infos
 from .matching.store import MatchStore
 from .semantic.context import cue_document, track_document
@@ -519,6 +520,84 @@ class Studio:
                          "skipped_reason": skipped.get(key, "")})
         return rows
 
+    # ----------------------------------------------------------------- build
+    def build_settings(self) -> BuildSettings:
+        project = self.require_project()
+        saved = project.get("build_settings") or {}
+        settings = BuildSettings(mod_name=f"{project.name} Soundtrack")
+        for key, value in saved.items():
+            if hasattr(settings, key):
+                setattr(settings, key, value)
+        return settings
+
+    def save_build_settings(self, settings: BuildSettings) -> None:
+        from dataclasses import asdict
+
+        self.require_project().set("build_settings", asdict(settings))
+
+    def build_mod(self, settings: Optional[BuildSettings] = None, progress=None, cancel=None) -> BuildResult:
+        import json as _json
+        from dataclasses import asdict
+
+        from .errors import OperationCancelled
+
+        project = self.require_project()
+        settings = settings or self.build_settings()
+        self.save_build_settings(settings)
+        mapping = self.match_store().final_mapping()
+        game_path = project.get("game_path")
+        if not game_path:
+            raise GameInstallError("Select your Crimson Desert folder on the Home page first.")
+        report = self.check_game()
+        if not report.usable:
+            raise GameInstallError("The Crimson Desert installation does not match the Analyzer database, so the "
+                                   "mod cannot be built safely.", hint=report.summary())
+        ref = project.active_analyzer()
+        model = self.game_model()
+        tracks = {t["id"]: Path(t["root"]) / t["rel_path"] for t in self.library_tracks()}
+        build_id = project.execute("INSERT INTO build(started_at, status, settings_json) VALUES (?,?,?)",
+                                   (now_iso(), "running", _json.dumps(asdict(settings)))).lastrowid
+        snapshot = self.paths.from_stored(ref["snapshot_path"])
+        from .analyzer_db.importer import open_snapshot
+
+        conn = open_snapshot(snapshot)
+        try:
+            builder = ModBuilder(self.paths, Path(game_path), conn, ref["installation_id"], model, tracks, settings)
+            result = builder.build(mapping, progress, cancel)
+        except OperationCancelled:
+            project.execute("UPDATE build SET status='cancelled', finished_at=? WHERE id=?", (now_iso(), build_id))
+            raise
+        except Exception as exc:
+            message = getattr(exc, "message", str(exc))
+            project.execute("UPDATE build SET status='failed', finished_at=?, error=? WHERE id=?",
+                            (now_iso(), message[:500], build_id))
+            project.add_event("error", "build", f"Build failed: {message}", getattr(exc, "details", ""))
+            raise
+        finally:
+            conn.close()
+        summary = {"cues": len(result.report["cues"]), "files": len(result.report["files"]),
+                   "warnings": result.warnings, "validation": asdict(result.validation),
+                   "size_bytes": sum(p.stat().st_size for p in result.output_dir.rglob("*") if p.is_file())}
+        project.execute("UPDATE build SET status='completed', finished_at=?, output_path=?, zip_path=?, summary_json=?"
+                        " WHERE id=?", (now_iso(), self.paths.to_stored(result.output_dir),
+                                        self.paths.to_stored(result.zip_path) if result.zip_path else None,
+                                        _json.dumps(summary), build_id))
+        project.add_event("info", "build", f"Mod built: {result.output_dir.name} ({summary['cues']} cues replaced).")
+        return result
+
+    def builds(self, limit: int = 20) -> List[Dict[str, Any]]:
+        import json as _json
+
+        rows = []
+        for r in self.require_project().query("SELECT * FROM build ORDER BY id DESC LIMIT ?", (limit,)):
+            item = dict(r)
+            item["summary"] = _json.loads(item.pop("summary_json") or "{}")
+            item["settings"] = _json.loads(item.pop("settings_json") or "{}")
+            item["output_dir"] = self.paths.from_stored(item["output_path"]) if item["output_path"] else None
+            item["zip"] = self.paths.from_stored(item["zip_path"]) if item["zip_path"] else None
+            rows.append(item)
+        return rows
+
     # --------------------------------------------------------------- status
     def project_status(self) -> ProjectStatus:
         project = self.require_project()
@@ -613,6 +692,19 @@ class Studio:
         else:
             steps.append(WorkflowStep(7, "Review / override matches", MISSING if run is None else WARN,
                                       "" if run is None else "No replacement confirmed yet."))
-        for number, title in ((8, "Build mod"), (9, "Validate output"), (10, "Export mod")):
-            steps.append(WorkflowStep(number, title, UNAVAILABLE, "Not available in this version."))
+        builds = self.builds(1)
+        last = builds[0] if builds else None
+        if last is None:
+            steps += [WorkflowStep(8, "Build mod", MISSING), WorkflowStep(9, "Validate output", MISSING),
+                      WorkflowStep(10, "Export mod", MISSING)]
+        elif last["status"] == "completed":
+            present = bool(last["output_dir"] and last["output_dir"].is_dir())
+            steps.append(WorkflowStep(8, "Build mod", OK, f"{last['summary'].get('cues', 0)} cues, {last['finished_at'][:16]}"))
+            steps.append(WorkflowStep(9, "Validate output", OK, "All checks passed."))
+            steps.append(WorkflowStep(10, "Export mod", OK if present else WARN,
+                                      str(last["zip"] or last["output_dir"]) if present else "Output folder was removed."))
+            status.last_build = last["finished_at"]
+        else:
+            steps.append(WorkflowStep(8, "Build mod", WARN, f"Last build {last['status']}: {last.get('error') or ''}"))
+            steps += [WorkflowStep(9, "Validate output", MISSING), WorkflowStep(10, "Export mod", MISSING)]
         return status

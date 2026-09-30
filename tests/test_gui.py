@@ -154,3 +154,32 @@ def test_matching_page_review_flow(app, window, tmp_path, game, analyzer_db):
     assert len(visible) == 1
     page.include_short.setChecked(True)
     assert page.table.rowCount() == 4
+
+
+def test_build_page_builds_a_mod(app, window, tmp_path, monkeypatch):
+    from soundtrack_studio.testing.fixtures import ANALYZER_FAKE_INSTALL_DB, extract_analyzer_fake_install
+
+    messages = []
+    monkeypatch.setattr(window, "info", lambda title, text: messages.append((title, text)))
+    studio = window.studio
+    game = extract_analyzer_fake_install(tmp_path / "Game")
+    studio.import_analyzer(ANALYZER_FAKE_INSTALL_DB)
+    studio.set_game_path(game)
+    write_test_flac(tmp_path / "Music" / "a.flac", seconds=60, tags={"TITLE": "Theme"})
+    studio.set_library_path(tmp_path / "Music")
+    studio.scan_library()
+    window.nav.setCurrentRow(5)  # Build
+    page = window.pages["build"]
+    assert not page.build_btn.isEnabled()  # nothing confirmed yet
+    track = studio.library_tracks()[0]["id"]
+    studio.match_store().choose("2001", track)
+    page.refresh()
+    assert page.build_btn.isEnabled() and "1</b> confirmed" in page.summary.text()
+    page.name.setText("GUI Mod")
+    page.make_zip.setChecked(False)
+    page.build()
+    wait(app, window, timeout=60)
+    assert not window.errors, window.errors
+    assert messages and messages[0][0] == "Mod built"
+    assert (studio.paths.output / "GUI Mod" / "manifest.json").is_file()
+    assert page.history.rowCount() == 1 and page.history.item(0, 1).text() == "completed"

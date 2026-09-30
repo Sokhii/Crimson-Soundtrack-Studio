@@ -65,11 +65,12 @@ def test_no_files_outside_app_folder_and_copy_keeps_state(tmp_path):
     assert state.returncode == 0, state.stderr
     data = json.loads(state.stdout)
     assert data["root"] == str(app_e.resolve())
-    assert data["settings_file"] and data["last_project"] == "app:projects/__selftest__"
+    assert data["settings_file"] and data["last_project"] == "app:projects/__selftest_build__"
     assert data["last_project_resolves"]
-    assert [p["name"] for p in data["projects"]] == ["__selftest__"]
+    assert sorted(p["name"] for p in data["projects"]) == ["__selftest__", "__selftest_build__"]
     assert "models/custom/.selftest-probe" in data["models"]
     assert "output/__selftest__/build-check.txt" in data["output"]
+    assert "output/__selftest_mod__/manifest.json" in data["output"]
     assert any(d.endswith("analyzer.sqlite3") for d in data["databases"])
     # the copied project opens with its imported database and caches from the new location
     from soundtrack_studio.services import Studio

@@ -29,6 +29,8 @@ from .config import Settings
 log = logging.getLogger(__name__)
 
 SELFTEST_PROJECT = "__selftest__"
+SELFTEST_BUILD_PROJECT = "__selftest_build__"
+SELFTEST_MOD = "__selftest_mod__"
 
 
 def _tree_fingerprint(root: Path) -> Dict[str, str]:
@@ -132,6 +134,30 @@ def run_selftest(paths: AppPaths, keep: bool = False) -> Dict[str, Any]:
         output_marker.write_text("self-test output location check\n", encoding="utf-8")
         model_probe.write_text("self-test model folder check\n", encoding="utf-8")
         checks["output_and_models_in_app_folder"] = paths.is_inside(output_marker) and paths.is_inside(model_probe)
+        # a real build from the Analyzer-built synthetic installation (encrypted/compressed archives, v150 banks)
+        from .compiler.build import BuildSettings
+        from .testing.fixtures import ANALYZER_FAKE_INSTALL_DB, extract_analyzer_fake_install
+
+        shutil.rmtree(paths.projects / SELFTEST_BUILD_PROJECT, ignore_errors=True)
+        studio.close_project()
+        studio.create_project(SELFTEST_BUILD_PROJECT)
+        build_game = extract_analyzer_fake_install(work / "Analyzer Install")
+        before_build_game = _tree_fingerprint(build_game)
+        imported = studio.import_analyzer(ANALYZER_FAKE_INSTALL_DB)
+        if not imported.reused:
+            leftovers += [imported.snapshot_path.parent, cache_path(paths, imported.sha256, 1)]
+        studio.set_game_path(build_game, allow_inside_app=True)
+        studio.set_library_path(music)
+        studio.scan_library()
+        tracks = {t["title"]: t["id"] for t in studio.library_tracks() if t["title"]}
+        store = studio.match_store()
+        store.choose("2001", tracks["Opening"])
+        store.choose("2004", tracks["Opening"])
+        result = studio.build_mod(BuildSettings(mod_name=SELFTEST_MOD, make_zip=False))
+        info["build"] = {"files": result.report["files"], "validation_ok": result.validation.ok}
+        checks["mod_built_and_validated"] = (result.validation.ok and paths.is_inside(result.output_dir)
+                                             and len(result.report["files"]) == 2)
+        checks["game_untouched_by_build"] = _tree_fingerprint(build_game) == before_build_game
         studio.settings.save(paths)
         checks["settings_in_app_folder"] = paths.settings_file.is_file() and paths.is_inside(paths.settings_file)
         checks["logs_in_app_folder"] = (paths.logs / "studio.log").is_file()
@@ -146,15 +172,17 @@ def run_selftest(paths: AppPaths, keep: bool = False) -> Dict[str, Any]:
             studio._cache = None
         if not keep:
             shutil.rmtree(project_folder, ignore_errors=True)
+            shutil.rmtree(paths.projects / SELFTEST_BUILD_PROJECT, ignore_errors=True)
+            shutil.rmtree(paths.output / SELFTEST_MOD, ignore_errors=True)
             shutil.rmtree(output_marker.parent, ignore_errors=True)
             model_probe.unlink(missing_ok=True)
             shutil.rmtree(work, ignore_errors=True)
             for leftover in leftovers:
                 shutil.rmtree(leftover, ignore_errors=True) if leftover.is_dir() else leftover.unlink(missing_ok=True)
-            stored = paths.to_stored(project_folder)
+            stored_names = {paths.to_stored(project_folder), paths.to_stored(paths.projects / SELFTEST_BUILD_PROJECT)}
             settings = studio.settings
-            settings.recent_projects = [p for p in settings.recent_projects if p != stored]
-            if settings.last_project == stored:
+            settings.recent_projects = [p for p in settings.recent_projects if p not in stored_names]
+            if settings.last_project in stored_names:
                 settings.last_project = settings.recent_projects[0] if settings.recent_projects else ""
             settings.save(paths)
 

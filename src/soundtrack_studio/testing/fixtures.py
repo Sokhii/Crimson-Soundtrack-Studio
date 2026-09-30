@@ -23,6 +23,21 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 SCHEMA_V1 = Path(__file__).with_name("analyzer_schema_v1.sql")
+# A synthetic install built by Crimson Desert Analyzer's own test builders (real PAZ/PAMT with LZ4 entries,
+# v150 banks) and the Analyzer database produced by scanning it. Used to test the compiler end to end.
+ANALYZER_FAKE_INSTALL_ZIP = Path(__file__).with_name("analyzer_fakeinstall.zip")
+ANALYZER_FAKE_INSTALL_DB = Path(__file__).with_name("analyzer_fakeinstall_v1.sqlite3")
+
+
+def extract_analyzer_fake_install(target: Path) -> Path:
+    """Unpack the Analyzer-built synthetic installation into ``target`` (returns the game folder)."""
+
+    import zipfile
+
+    target.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(ANALYZER_FAKE_INSTALL_ZIP) as zf:
+        zf.extractall(target)
+    return target
 
 BANK_BGM = 412724365        # FNV-1("bgm")
 BANK_ENV = 616116187        # FNV-1("env_region_desert")

@@ -14,8 +14,10 @@ a = Analysis(
     pathex=[str(ROOT / "src")],
     datas=[(str(ROOT / "src" / "soundtrack_studio" / "testing" / "analyzer_schema_v1.sql"), "soundtrack_studio/testing"),
            (str(ROOT / "src" / "soundtrack_studio" / "resources" / "model_catalog.json"), "soundtrack_studio/resources"),
+           (str(ROOT / "src" / "soundtrack_studio" / "testing" / "analyzer_fakeinstall.zip"), "soundtrack_studio/testing"),
+           (str(ROOT / "src" / "soundtrack_studio" / "testing" / "analyzer_fakeinstall_v1.sqlite3"), "soundtrack_studio/testing"),
            (str(ROOT / "LICENSE"), "."), (str(ROOT / "THIRD_PARTY_NOTICES.md"), ".")],
-    hiddenimports=["soundfile", "_soundfile", "_soundfile_data"],
+    hiddenimports=["soundfile", "_soundfile", "_soundfile_data", "lz4.block", "cryptography"],
     excludes=["tkinter", "matplotlib", "PySide6.QtWebEngineCore", "PySide6.QtQml", "PySide6.QtQuick", "PySide6.Qt3DCore"],
     noarchive=False,
 )

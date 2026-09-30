@@ -186,6 +186,19 @@ MIGRATIONS: List[tuple[int, str]] = [
         updated_at TEXT NOT NULL
     );
     """),
+    (4, """
+    CREATE TABLE build (
+        id INTEGER PRIMARY KEY,
+        started_at TEXT NOT NULL,
+        finished_at TEXT,
+        status TEXT NOT NULL,                -- running | completed | failed | cancelled
+        output_path TEXT,                    -- stored path (app:output/...)
+        zip_path TEXT,
+        settings_json TEXT,
+        summary_json TEXT,
+        error TEXT
+    );
+    """),
 ]
 LATEST_VERSION = MIGRATIONS[-1][0]
 

@@ -20,6 +20,7 @@ from ..library.scanner import ScanProgress
 from ..services import Studio
 from . import workers
 from .ai_page import AIPage
+from .build_page import BuildPage
 from .game_page import GameDataPage
 from .home_page import HomePage
 from .library_page import LibraryPage
@@ -27,25 +28,6 @@ from .matching_page import MatchingPage
 from .widgets import STYLE, Dialogs, esc, show_error
 
 log = logging.getLogger(__name__)
-
-
-class PlaceholderPage(QWidget):
-    def __init__(self, title: str, text: str) -> None:
-        super().__init__()
-        self.setObjectName("page")
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 18, 24, 18)
-        head = QLabel(title)
-        head.setObjectName("pageTitle")
-        layout.addWidget(head)
-        body = QLabel(text)
-        body.setWordWrap(True)
-        body.setTextFormat(Qt.TextFormat.RichText)
-        layout.addWidget(body)
-        layout.addStretch(1)
-
-    def refresh(self) -> None:
-        pass
 
 
 class ProjectDialog(QDialog):
@@ -134,10 +116,7 @@ class MainWindow(QMainWindow):
         self._add_page("library", "Music Library", LibraryPage(self))
         self._add_page("ai", "AI Model", AIPage(self))
         self._add_page("matching", "Matching", MatchingPage(self))
-        self._add_page("build", "Build", PlaceholderPage(
-            "Build",
-            "Building the mod arrives in a later version.<br><br>The Studio will create a separate mod package for "
-            "a mod manager such as DMM. Your Crimson Desert installation is never modified."), False)
+        self._add_page("build", "Build", BuildPage(self))
         self.nav.currentRowChanged.connect(self._page_changed)
         self.nav.setCurrentRow(0)
 
@@ -313,7 +292,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(f"{project.name} - {APP_DISPLAY_NAME}" if project else APP_DISPLAY_NAME)
         self.pages["home"].refresh()
         self.pages["library"].refresh()
-        for key in ("ai", "matching"):
+        for key in ("ai", "matching", "build"):
             if self.stack.currentWidget() is self.pages[key]:
                 self.pages[key].refresh()
         if reload_game_data:

@@ -3,3 +3,5 @@
 PySide6-Essentials>=6.7,<7   # LGPL-3.0, dynamically linked in the one-folder build
 numpy>=1.26                  # BSD-3-Clause
 soundfile>=0.12              # BSD-3-Clause (bundles libsndfile, LGPL-2.1, as a shared library)
+cryptography>=42           # Apache-2.0 / BSD (ChaCha20 for reading original game archives)
+lz4>=4.3                   # BSD-3-Clause (LZ4 block decompression of game archive entries)
