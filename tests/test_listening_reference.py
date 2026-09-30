@@ -107,7 +107,10 @@ def test_text_embeddings_and_tokens_match(ours, reference):
 
 
 def test_public_domain_recordings_report(ours, tmp_path):
-    """Diagnostics only: vocal margins and heard tags on real recordings listed in CSS_CLAP_SAMPLES (JSON)."""
+    """Diagnostics: per-excerpt vocal margins and heard tags on real recordings listed in CSS_CLAP_SAMPLES (JSON),
+    plus spliced 'instrumental intro, then singing' files like a typical song."""
+
+    import soundfile as sf
 
     from soundtrack_studio.listening.listen import PromptBank, all_prompts, listen_file
 
@@ -116,12 +119,41 @@ def test_public_domain_recordings_report(ours, tmp_path):
         pytest.skip("no sample recordings downloaded")
     prompts = all_prompts()
     bank = PromptBank(dict(zip(prompts, ours.embed_text(prompts))))
+    # splice: 40 s of an instrumental piece, then 20 s of a vocal recording (expected: sung vocals)
+    vocal_files = [s_ for s_ in samples if s_["label"] == "vocals"]
+    inst_files = [s_ for s_ in samples if s_["label"] == "instrumental"]
+    for i, (v, n) in enumerate(zip(vocal_files[:3], inst_files[:3])):
+        try:
+            a, ra = sf.read(n["path"], dtype="float32", always_2d=True)
+            b, rb = sf.read(v["path"], dtype="float32", always_2d=True)
+        except Exception as exc:  # noqa: BLE001 - diagnostics only
+            print(f"splice {i}: {exc}")
+            continue
+        if ra != rb:
+            continue
+        mix = np.concatenate([a[:40 * ra].mean(axis=1), b[len(b) // 3: len(b) // 3 + 20 * rb].mean(axis=1)])
+        path = tmp_path / f"spliced_{i}.wav"
+        sf.write(str(path), mix, ra)
+        samples.append({"label": "vocals (spliced: 40 s instrumental + 20 s singing)", "path": str(path)})
+    tally = {}
     for item in samples:
-        result = listen_file(ours, Path(item["path"]), "reference")
+        try:
+            result = listen_file(ours, Path(item["path"]), "reference")
+        except Exception as exc:  # noqa: BLE001
+            print(f"[{item['label']}] {Path(item['path']).name}: unreadable ({exc})")
+            continue
         summary = bank.summary(result)
-        print(f"[{item['label']}] {Path(item['path']).name}: vocals={summary.get('vocals')} "
-              f"margin={summary.get('vocals_margin')} instruments={summary.get('instrumentation')} "
-              f"mood={summary.get('mood')} style={summary.get('style')}")
+        verdict = summary.get("vocals")
+        expected = {"vocals": "sung vocals", "instrumental": "instrumental"}.get(item["label"].split(" ")[0])
+        ok = expected is None or verdict == expected
+        key = item["label"].split(" ")[0]
+        good, total = tally.get(key, (0, 0))
+        tally[key] = (good + (verdict == expected), total + 1) if expected else (0, total + 1)
+        print(f"[{item['label']}] {item.get('title') or Path(item['path']).name}: vocals={verdict} "
+              f"({summary.get('vocals_excerpts')}) margins={summary.get('vocals_margins')} "
+              f"{'' if ok else '  <-- MISMATCH'} instruments={summary.get('instrumentation')}")
+    for key, (good, total) in tally.items():
+        print(f"TALLY {key}: {good}/{total} as expected" if key != "choir" else f"TALLY choir: {total} (report only)")
 
 
 def test_text_variants_diagnostics(model_dir, reference):

@@ -50,16 +50,43 @@ def test_read_excerpts_seeks_and_skips_silence(tmp_path):
     assert 1 <= len(ex.audio) < 6            # silent excerpts are skipped
 
 
-def test_prompt_bank_summary_format():
+def _bank(dim=64):
     prompts = all_prompts()
     rng = np.random.default_rng(1)
-    vectors = {p: v / np.linalg.norm(v) for p, v in zip(prompts, rng.standard_normal((len(prompts), 8)).astype(np.float32))}
-    bank = PromptBank(vectors)
-    target = np.mean([vectors[p] for p in INSTRUMENTAL_PROMPTS], axis=0) - np.mean([vectors[p] for p in VOCAL_PROMPTS], axis=0)
-    target += vectors["music featuring strings"] * 2
-    summary = bank.summary({"embedding": (target / np.linalg.norm(target)).tolist()})
+    vectors = rng.standard_normal((len(prompts), dim)).astype(np.float32)
+    return PromptBank({p: v / np.linalg.norm(v) for p, v in zip(prompts, vectors)})
+
+
+def _towards(bank, prompts, strength=1.0, dim=64, seed=0):
+    base = np.random.default_rng(seed).standard_normal(dim).astype(np.float32) * 0.05
+    v = base + strength * np.mean([bank.vectors[p] for p in prompts], axis=0)
+    return (v / np.linalg.norm(v)).tolist()
+
+
+def test_vocals_are_judged_per_excerpt():
+    bank = _bank()
+    vocal = [_towards(bank, VOCAL_PROMPTS, seed=i) for i in range(2)]
+    inst = [_towards(bank, INSTRUMENTAL_PROMPTS, seed=10 + i) for i in range(4)]
+    # a song whose singing is in 2 of 6 excerpts (intro, solos and outro are instrumental) has vocals
+    song = {"embedding": inst[0], "excerpt_embeddings": inst + vocal}
+    v = bank.vocals(song)
+    assert v["vocals"] == "sung vocals" and v["vocals_excerpts"] == "2 of 6" and len(v["vocals_margins"]) == 6
+    # ... even though its averaged fingerprint leans instrumental
+    assert bank.vocals({"embedding": np.mean([np.array(e) for e in song["excerpt_embeddings"]], axis=0).tolist()})
+    # one stray excerpt out of six is not enough; with no excerpt close to singing it is instrumental
+    assert bank.vocals({"excerpt_embeddings": inst + inst[:1] + vocal[:1]})["vocals"] == "unclear"
+    assert bank.vocals({"excerpt_embeddings": inst})["vocals"] == "instrumental"
+    # older results (mean embedding only) still work
+    assert bank.vocals({"embedding": vocal[0]})["vocals"] == "sung vocals"
+
+
+def test_prompt_bank_summary_format():
+    bank = _bank()
+    inst = _towards(bank, INSTRUMENTAL_PROMPTS)
+    summary = bank.summary({"embedding": inst, "excerpt_embeddings": [inst, inst]})
     assert summary["vocals"] == "instrumental" and summary["vocals_margin"] < 0
-    assert "strings" in summary.get("instrumentation", {})
+    strings = _towards(bank, ["music featuring strings", "the sound of strings"], strength=3.0)
+    assert "strings" in bank.summary({"embedding": strings}).get("instrumentation", {})
     assert bank.summary({"embedding": []}) is None
     assert PromptBank({}).summary({"embedding": [1.0] * 8}) is None
     assert sounds_alike({"embedding": [1, 0]}, {"embedding": [0, 1]}) == pytest.approx(0.0)

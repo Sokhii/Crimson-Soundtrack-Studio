@@ -33,6 +33,12 @@ def _r(value, digits=2):
     return None if value is None else round(float(value), digits)
 
 
+def _heard(heard: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """The listening summary without per-excerpt numbers (they add nothing for the description model)."""
+
+    return {k: v for k, v in heard.items() if k != "vocals_margins"} if heard else None
+
+
 def _measurements(f: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "tempo_bpm_estimate": f.get("tempo_bpm"), "tempo_confidence": _r(f.get("tempo_confidence")),
@@ -62,7 +68,7 @@ def track_document(track: Dict[str, Any], heard: Optional[Dict[str, Any]] = None
         "year": track.get("year"), "comment": comment or None,
         "duration_s": _r(track.get("duration_s"), 1), "channels": track.get("channels"),
         "measurements": _measurements(f),
-        "heard": heard or None,
+        "heard": _heard(heard),
     }
     return _prune(doc)
 
@@ -93,7 +99,7 @@ def cue_document(model: GameMusicModel, cue: MusicCue, audio: Optional[Dict[str,
         "is_transition": cue.is_transition, "markers": len(cue.markers),
         "channels": cue.channels, "reused_by_containers": cue.parent_count,
         "measurements": _measurements(audio) if audio else None,
-        "heard": heard or None,
+        "heard": _heard(heard),
     }
     return _prune(doc)
 

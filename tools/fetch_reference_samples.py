@@ -17,9 +17,10 @@ from pathlib import Path
 
 API = "https://commons.wikimedia.org/w/api.php"
 QUERIES = {
-    "vocals": ["Enrico Caruso", "Billy Murray singer", "Ada Jones"],
-    "instrumental": ["Musopen", "Scott Joplin rag", "Kevin MacLeod"],
-    "choir": ["Gregorian chant"],
+    "vocals": ["Enrico Caruso", "Billy Murray singer", "Ada Jones", "Vocaloid", "J-pop song", "pop song vocals",
+               "rock song vocals"],
+    "instrumental": ["Musopen", "Scott Joplin rag", "Kevin MacLeod", "orchestral film score", "epic orchestral"],
+    "choir": ["Gregorian chant", "choir orchestra"],
 }
 HEADERS = {"User-Agent": "CrimsonSoundtrackStudio-CI/1.0 (https://github.com/Sokhii/Crimson-Soundtrack-Studio)"}
 

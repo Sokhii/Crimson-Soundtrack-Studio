@@ -29,7 +29,7 @@ from ..compiler.audio import resample
 from ..semantic.profile import CATEGORIES
 from .clap import ClapModel, ListeningError
 
-LISTEN_VERSION = 1
+LISTEN_VERSION = 2   # 2: per-excerpt embeddings (vocals are judged per excerpt)
 EXCERPT_S = 10.0
 MAX_EXCERPTS = 6
 SILENT_DBFS = -50.0
@@ -43,12 +43,17 @@ TEMPLATES: Dict[str, Tuple[str, ...]] = {
     "style": ("{} music", "a piece of {} music"),
 }
 SUMMARY_FIELDS = ("instrumentation", "mood", "atmosphere", "style", "emotion")
-VOCAL_PROMPTS = ("a song with a singer singing lyrics", "music with sung vocals", "a vocalist singing a melody")
+VOCAL_PROMPTS = ("a song with a singer singing lyrics", "music with sung vocals", "a vocalist singing a melody",
+                 "a woman singing", "a man singing", "a pop song with a lead singer")
 INSTRUMENTAL_PROMPTS = ("instrumental music without vocals", "an instrumental piece with no singing",
                         "instrumental music")
-# provisional decision thresholds on (mean vocal - mean instrumental) cosine; stored margins allow re-tuning
-VOCAL_MARGIN = 0.02
-INSTRUMENTAL_MARGIN = -0.01
+# Vocals are judged per ten-second excerpt: margin = mean cosine to the vocal prompts minus mean cosine to the
+# instrumental prompts. Averaging a whole song first hides singing behind intros, solos and dense arrangements.
+# A track has sung vocals when singing is clear in enough excerpts; it is instrumental only when no excerpt comes
+# close. Only embeddings are stored, so these can be re-tuned without listening again.
+VOCAL_MARGIN = 0.02                # an excerpt with singing
+INSTRUMENTAL_MARGIN = -0.01        # every excerpt below this: instrumental
+VOCAL_SHARE = 1 / 3              # share of excerpts that must have singing (at least one): 2 of 6
 STRONG_Z, MODERATE_Z, MAX_PER_FIELD = 1.6, 1.0, 3
 PROMPT_EMBED_VERSION = 3   # 3: fp16 text tower (identical to PyTorch); 2: int8 tower one prompt at a time
 
@@ -114,7 +119,17 @@ def listen_file(model: ClapModel, path: Path, model_key: str) -> Dict[str, Any]:
     mean = mean / max(float(np.linalg.norm(mean)), 1e-12)
     return {"version": LISTEN_VERSION, "model": model_key, "excerpts": len(ex.audio),
             "excerpt_starts_s": [round(s, 1) for s in ex.starts_s], "duration_s": round(ex.duration_s, 2),
-            "embedding": [round(float(v), 5) for v in mean]}
+            "embedding": [round(float(v), 5) for v in mean],
+            "excerpt_embeddings": [[round(float(v), 4) for v in e] for e in emb]}
+
+
+def _unit(v) -> np.ndarray:
+    v = np.asarray(v, dtype=np.float32)
+    return v / max(float(np.linalg.norm(v)), 1e-12)
+
+
+def excerpt_embeddings(result: Optional[Dict[str, Any]]) -> List[np.ndarray]:
+    return [_unit(e) for e in (result or {}).get("excerpt_embeddings") or []]
 
 
 def embedding_of(result: Optional[Dict[str, Any]]) -> Optional[np.ndarray]:
@@ -143,6 +158,15 @@ class PromptBank:
     def _score(self, emb: np.ndarray, prompts: Sequence[str]) -> float:
         return float(np.mean([float(np.dot(emb, self.vectors[p])) for p in prompts]))
 
+    def vocal_margin(self, emb: np.ndarray) -> float:
+        return self._score(emb, VOCAL_PROMPTS) - self._score(emb, INSTRUMENTAL_PROMPTS)
+
+    def vocals(self, result: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        """Vocals judged per excerpt (older results without excerpts: from the mean embedding)."""
+
+        parts = excerpt_embeddings(result) or [e for e in [embedding_of(result)] if e is not None]
+        return _vocal_decision([self.vocal_margin(e) for e in parts])
+
     def summary(self, result: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         """What the listening model heard, in the profile vocabulary (``semantic.rules._apply_heard`` format)."""
 
@@ -150,10 +174,7 @@ class PromptBank:
         if emb is None or not self.complete():
             return None
         out: Dict[str, Any] = {"source": "listening model (CLAP)"}
-        margin = self._score(emb, VOCAL_PROMPTS) - self._score(emb, INSTRUMENTAL_PROMPTS)
-        out["vocals"] = ("sung vocals" if margin > VOCAL_MARGIN else
-                         "instrumental" if margin < INSTRUMENTAL_MARGIN else "unclear")
-        out["vocals_margin"] = round(margin, 3)
+        out.update(self.vocals(result))
         for category in SUMMARY_FIELDS:
             terms = CATEGORIES[category]
             scores = np.array([self._score(emb, [t.format(term) for t in TEMPLATES[category]]) for term in terms])
@@ -170,6 +191,20 @@ class PromptBank:
             if picked:
                 out[category] = picked
         return out
+
+
+def _vocal_decision(margins: List[float]) -> Dict[str, Any]:
+    n = len(margins)
+    sung = sum(1 for m in margins if m > VOCAL_MARGIN)
+    needed = max(1, int(np.ceil(VOCAL_SHARE * n - 1e-9)))
+    if sung >= needed:
+        verdict = "sung vocals"
+    elif max(margins) < INSTRUMENTAL_MARGIN:
+        verdict = "instrumental"
+    else:
+        verdict = "unclear"
+    return {"vocals": verdict, "vocals_excerpts": f"{sung} of {n}", "vocals_margin": round(float(np.mean(margins)), 3),
+            "vocals_margins": [round(float(m), 3) for m in margins]}
 
 
 class ListeningCache:

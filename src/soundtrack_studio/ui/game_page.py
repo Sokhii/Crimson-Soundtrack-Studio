@@ -31,7 +31,8 @@ class NumItem(QTableWidgetItem):
 def _heard_text(summary: dict) -> str:
     parts = []
     if summary.get("vocals"):
-        parts.append(summary["vocals"])
+        where = f" (singing heard in {summary['vocals_excerpts']} excerpts)" if summary.get("vocals_excerpts") else ""
+        parts.append(summary["vocals"] + where)
     for field in ("instrumentation", "mood", "atmosphere", "style", "emotion"):
         tags = summary.get(field) or {}
         if tags:
