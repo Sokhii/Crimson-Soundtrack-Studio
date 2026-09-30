@@ -179,11 +179,11 @@ def test_public_domain_recordings_report(ours, tmp_path):
         exc_emb = excerpt_embeddings(result)
         margins = {name: [f(e) for e in exc_emb] for name, f in strategies.items()}
         rows.append((item, margins))
-        print(f"[{item['label']}] {item.get('title')}: " + " | ".join(
+        print(f"[{item['label']}] {item.get('title')} ({len(exc_emb)} excerpts): " + " | ".join(
             f"{name}: {[round(m, 3) for m in ms]}" for name, ms in margins.items()))
     for name in strategies:
         for tv in (-0.03, -0.02, -0.01, 0.0, 0.01, 0.02, 0.03):
-            vok = vtot = iok = itot = 0
+            vok = vtot = iok = itot = jok = jtot = 0
             for item, margins in rows:
                 ms = margins[name]
                 if not ms:
@@ -192,10 +192,14 @@ def test_public_domain_recordings_report(ours, tmp_path):
                 if item["label"] == "vocals":
                     vtot += 1
                     vok += sung
+                elif item["label"] == "japanese":      # Japanese recordings, mostly sung (labels unverified)
+                    jtot += 1
+                    jok += sung
                 elif item["label"] == "instrumental":
                     itot += 1
                     iok += not sung
-            print(f"TALLY {name} threshold {tv:+.2f}: vocals found {vok}/{vtot}, instrumentals kept {iok}/{itot}")
+            print(f"TALLY {name} threshold {tv:+.2f}: vocals found {vok}/{vtot}, japanese marked sung {jok}/{jtot}, "
+                  f"instrumentals kept {iok}/{itot}")
 
 
 def test_text_variants_diagnostics(model_dir, reference):

@@ -24,6 +24,12 @@ QUERIES = {   # instrumentals first: they are what a false "vocals" verdict woul
     "choir": ["Gregorian chant", "choir orchestra"],
 }
 PAUSE_S = 2.0
+# Japanese sung recordings (not Vocaloid): categories and files on Wikimedia Commons; titles are printed so that
+# each one can be judged by name (some traditional pieces are instrumental).
+JAPANESE_CATEGORIES = ["Category:Audio files of songs of Japan", "Category:Audio files of music of Japan"]
+JAPANESE_FILES = ["File:Sakura Sakura.song.ogg", "File:Kojonotsuki.ogg", "File:Kagome Kagome.song.ogg",
+                  "File:Umi Yukaba.ogg", "File:Genkō.ogg", "File:Oppaari Song.ogg", "File:Freely Tomorrow.ogg",
+                  "File:Fukuoka City Anthem.ogg", "File:Koromogo-e (c. 1930).ogg"]
 HEADERS = {"User-Agent": "CrimsonSoundtrackStudio-CI/1.0 (https://github.com/Sokhii/Crimson-Soundtrack-Studio)"}
 
 
@@ -87,6 +93,37 @@ def main() -> int:
                 taken += 1
                 if taken >= args.per_query:
                     break
+    # Japanese songs: explicit files plus category members, downloaded once each
+    titles = list(JAPANESE_FILES)
+    for cat in JAPANESE_CATEGORIES:
+        try:
+            data = json.loads(_get(API + "?" + urllib.parse.urlencode({
+                "action": "query", "format": "json", "list": "categorymembers", "cmtitle": cat, "cmtype": "file",
+                "cmlimit": "40"})))
+            titles += [m["title"] for m in (data.get("query") or {}).get("categorymembers", [])]
+        except Exception as exc:  # noqa: BLE001
+            print(f"category {cat!r} failed: {exc}")
+    taken = 0
+    for title in dict.fromkeys(titles):
+        if taken >= 14:
+            break
+        try:
+            data = json.loads(_get(API + "?" + urllib.parse.urlencode({
+                "action": "query", "format": "json", "titles": title, "prop": "imageinfo", "iiprop": "url|size|mime"})))
+            page = next(iter((data.get("query") or {}).get("pages", {}).values()), {})
+            info = (page.get("imageinfo") or [{}])[0]
+            if info.get("mime") not in ("application/ogg", "audio/ogg", "audio/x-flac", "audio/flac", "audio/wav",
+                                        "audio/x-wav", "audio/mpeg") or not 100_000 < info.get("size", 0) < 20_000_000:
+                continue
+            name = f"japanese_{len(samples):02d}{Path(urllib.parse.urlparse(info['url']).path).suffix}"
+            (dest / name).write_bytes(_get(info["url"]))
+        except Exception as exc:  # noqa: BLE001
+            print(f"japanese file {title!r} failed: {exc}")
+            continue
+        real = "instrumental" if "instrumental" in title.lower() else "japanese"
+        samples.append({"label": real, "path": str(dest / name), "title": title})
+        print(f"japanese: {title}")
+        taken += 1
     Path(args.out).write_text(json.dumps(samples), encoding="utf-8")
     print(f"{len(samples)} samples")
     return 0
