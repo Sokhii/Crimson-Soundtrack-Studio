@@ -128,8 +128,24 @@ class ClapModel:
             tokenizer.enable_truncation(max_length=512)
             self._tokenizer = tokenizer
         if self._text is None:
-            # the text tower runs once per prompt list; the CPU is plenty and avoids GPU memory
-            self._text = self._session(self._ort, self.files["text"], self._ort.SessionOptions(), ["CPUExecutionProvider"])
+            # The text tower runs once per prompt list, so the CPU is plenty and graph optimisations buy nothing.
+            # They are limited on purpose: ONNX Runtime 1.24 (the DirectML build) breaks the fp16 text tower in its
+            # extended LayerNorm fusion ("InsertedPrecisionFreeCast ... does not exist"); basic, then none, avoid it.
+            errors = []
+            for level in (self._ort.GraphOptimizationLevel.ORT_ENABLE_BASIC,
+                          self._ort.GraphOptimizationLevel.ORT_DISABLE_ALL):
+                options = self._ort.SessionOptions()
+                options.graph_optimization_level = level
+                options.log_severity_level = 3
+                try:
+                    self._text = self._ort.InferenceSession(os_path(self.model_dir / self.files["text"]),
+                                                            sess_options=options, providers=["CPUExecutionProvider"])
+                    break
+                except Exception as exc:  # noqa: BLE001 - onnxruntime raises its own types
+                    errors.append(f"{level}: {exc}")
+            else:
+                raise ListeningError("The listening model's text part could not be loaded.",
+                                     hint="Verify or re-download the listening model.", details="\n".join(errors))
         return self._text
 
     def embed_text(self, texts: Sequence[str], batch_size: int = 1) -> np.ndarray:
