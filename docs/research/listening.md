@@ -39,8 +39,8 @@ Design: read through the Analyzer's archive records (ChaCha20/LZ4 as in the comp
 
 Vocals: mean cosine to three "sung vocals" prompts minus three "instrumental" prompts; > 0.02 = sung vocals,
 < -0.01 = instrumental, otherwise unclear. On public-domain recordings from Wikimedia Commons (CI diagnostics,
-2026-09-30, int8 text tower, one prompt at a time): all six vocal recordings scored 0.059-0.182 (sung vocals); the instrumental
-pieces scored -0.125 to -0.380 (instrumental). Only embeddings are stored, so thresholds and prompts can be re-tuned
+2026-09-30, with the text tower the app uses, identical to PyTorch): all six vocal recordings scored 0.048-0.204
+(sung vocals); all four instrumental pieces scored -0.162 to -0.299 (instrumental). Only embeddings are stored, so thresholds and prompts can be re-tuned
 without listening again.
 
 Why embeddings plus zero-shot tags instead of free text: the profile vocabulary is fixed, CLAP scores exactly those
