@@ -16,26 +16,43 @@ import urllib.request
 from pathlib import Path
 
 API = "https://commons.wikimedia.org/w/api.php"
-QUERIES = {
-    "vocals": ["Enrico Caruso", "Billy Murray singer", "Ada Jones", "Vocaloid", "vocal pop music made with AI",
-               "Suno AI song", "song with lyrics pop", "rock song vocals", "Brad Sucks", "Jonathan Coulton"],
+QUERIES = {   # instrumentals first: they are what a false "vocals" verdict would hurt
     "instrumental": ["Musopen", "Scott Joplin rag", "Kevin MacLeod", "instrumental music", "chiptune",
-                     "epic orchestral", "instrumental rock", "electronic instrumental"],
+                     "epic orchestral", "instrumental rock", "electronic instrumental", "film score orchestra"],
+    "vocals": ["Enrico Caruso", "Billy Murray singer", "Vocaloid", "vocal pop music made with AI",
+               "Suno AI song", "song with lyrics pop", "rock song vocals", "Jonathan Coulton"],
     "choir": ["Gregorian chant", "choir orchestra"],
 }
+PAUSE_S = 2.0
 HEADERS = {"User-Agent": "CrimsonSoundtrackStudio-CI/1.0 (https://github.com/Sokhii/Crimson-Soundtrack-Studio)"}
 
 
 def _get(url: str) -> bytes:
-    with urllib.request.urlopen(urllib.request.Request(url, headers=HEADERS), timeout=120) as resp:
-        return resp.read()
+    """GET with a pause before every request and exponential backoff on HTTP 429 (Wikimedia's bot limit)."""
+
+    import time
+    import urllib.error
+
+    delay = 8.0
+    for attempt in range(5):
+        time.sleep(PAUSE_S)
+        try:
+            with urllib.request.urlopen(urllib.request.Request(url, headers=HEADERS), timeout=120) as resp:
+                return resp.read()
+        except urllib.error.HTTPError as exc:
+            if exc.code != 429 or attempt == 4:
+                raise
+            retry = exc.headers.get("Retry-After")
+            time.sleep(min(90.0, float(retry) if retry and retry.isdigit() else delay))
+            delay *= 2
+    raise RuntimeError("unreachable")
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--dest", required=True)
     parser.add_argument("--out", required=True)
-    parser.add_argument("--per-query", type=int, default=2)
+    parser.add_argument("--per-query", type=int, default=1)
     args = parser.parse_args()
     dest = Path(args.dest)
     dest.mkdir(parents=True, exist_ok=True)
