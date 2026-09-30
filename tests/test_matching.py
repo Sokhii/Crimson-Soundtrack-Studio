@@ -187,3 +187,26 @@ def test_rank_tracks_for_cue(matched):
     rows = studio.rank_tracks_for_cue("2001")
     assert len(rows) == 3 and rows[0]["candidate"].score >= rows[-1]["candidate"].score
     assert studio.rank_tracks_for_cue("999") == []
+
+
+def test_sounds_alike_breaks_ties_and_explains(model):
+    import numpy as np
+
+    same = prof(DARK).profile
+    a, b = np.array([1.0, 0.0, 0.0], np.float32), np.array([0.0, 1.0, 0.0], np.float32)
+    lib = [TrackInfo(1, "Twin A", 200, 2, None, same, embedding=a),
+           TrackInfo(2, "Twin B", 200, 2, None, same, embedding=b)]
+    cues = {"2001": prof(DARK)}
+    # without listening, identical profiles tie and the lower id wins
+    plain = Matcher(model, cues, lib, MatchSettings(allow_reuse=True)).run()
+    assert plain["2001"].candidates[0].track_id == 1
+    # the cue sounds like track 2
+    heard = Matcher(model, cues, lib, MatchSettings(), cue_embeddings={"2001": b}).run()
+    best = heard["2001"].candidates[0]
+    assert best.track_id == 2 and best.components["sounds_alike"] == pytest.approx(1.0)
+    assert best.reasons[0].startswith("Sounds similar to the original")
+    other = heard["2001"].candidates[1]
+    assert any(r.startswith("Sounds quite different") for r in other.reasons)
+    # can be switched off
+    off = Matcher(model, cues, lib, MatchSettings(use_sound=False), cue_embeddings={"2001": b}).run()
+    assert off["2001"].candidates[0].track_id == 1 and "sounds_alike" not in off["2001"].candidates[0].components

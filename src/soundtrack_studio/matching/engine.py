@@ -4,7 +4,8 @@ Pipeline (deterministic first, AI last):
 
     game cue ──► deterministic eligibility (not a transition/short segment unless asked)
              ──► candidate filtering (readable, not a duplicate, described, duration usable)
-             ──► semantic similarity (profiles) + duration fit + tempo agreement
+             ──► semantic similarity (profiles) + sounds alike (listening model, when used)
+                 + duration fit + tempo agreement
              ──► optional local-AI judgement of the shortlist only
              ──► diversity-aware assignment (limits how often one track is reused)
              ──► proposals with confidence, reasons and warnings
@@ -42,6 +43,7 @@ class MatchSettings:
     max_uses_per_track: int = 0          # 0 = automatic (enough for every cue to get a proposal)
     reuse_penalty: float = 0.06          # score subtracted per earlier use of the same track
     use_ai: bool = False
+    use_sound: bool = True               # compare the audio itself when the listening model heard both sides
     alternatives: int = SHORTLIST - 1
 
     def to_dict(self) -> Dict[str, Any]:
@@ -56,6 +58,7 @@ class TrackInfo:
     channels: int
     tempo_bpm: Optional[float]
     profile: SemanticProfile
+    embedding: Any = None                # listening-model audio embedding (normalised numpy vector) or None
 
 
 @dataclass
@@ -148,7 +151,10 @@ def confidence_label(value: float) -> str:
     return "high" if value >= 0.6 else "medium" if value >= 0.35 else "low"
 
 
-def score_candidate(cue: MusicCue, cue_p: SemanticProfile, track: TrackInfo, explain_now: bool = True) -> Optional[Candidate]:
+def score_candidate(cue: MusicCue, cue_p: SemanticProfile, track: TrackInfo, explain_now: bool = True,
+                    alike: Optional[Tuple[float, float]] = None) -> Optional[Candidate]:
+    """``alike`` = (audio cosine similarity, its rank among the library for this cue: 1.0 = most alike)."""
+
     cue_s = (cue.duration_ms or 0) / 1000
     if cue_s and track.duration_s < cue_s * MIN_DURATION_RATIO:
         return None
@@ -158,8 +164,15 @@ def score_candidate(cue: MusicCue, cue_p: SemanticProfile, track: TrackInfo, exp
     sem = round(0.5 + (raw_sem - 0.5) * (0.35 + 0.65 * coverage), 4) if parts else 0.0
     dfit, _how = duration_fit(track.duration_s, cue_s)
     tfit = tempo_fit(cue.tempo_bpm, track.tempo_bpm)
-    score = 0.78 * sem + 0.17 * dfit + (0.05 * tfit if tfit is not None else 0.05 * 0.5)
-    cand = Candidate(track.id, round(score, 4), sem, dfit, tfit, {**parts, "duration": dfit}, [], [], 0.0)
+    tempo_part = 0.05 * tfit if tfit is not None else 0.05 * 0.5
+    components = {**parts, "duration": dfit}
+    if alike is not None:
+        # heard on both sides: the sound itself counts alongside the described character
+        score = 0.55 * sem + 0.25 * alike[1] + 0.15 * dfit + tempo_part
+        components.update(sounds_alike=round(alike[0], 4), sounds_alike_rank=round(alike[1], 3))
+    else:
+        score = 0.78 * sem + 0.17 * dfit + tempo_part
+    cand = Candidate(track.id, round(score, 4), sem, dfit, tfit, components, [], [], 0.0)
     if explain_now:
         add_explanations(cand, cue, cue_p, track)
     return cand
@@ -173,6 +186,14 @@ def add_explanations(cand: Candidate, cue: MusicCue, cue_p: SemanticProfile, tra
     cue_s = (cue.duration_ms or 0) / 1000
     _dfit, how = duration_fit(track.duration_s, cue_s)
     reasons = explain(cue_p, track.profile, cand.components)
+    rank = cand.components.get("sounds_alike_rank")
+    if rank is not None:
+        if rank >= 0.8:
+            reasons.insert(0, f"Sounds similar to the original (among the closest {max(1, round((1 - rank) * 100))}% "
+                              f"of your library; audio similarity {cand.components['sounds_alike']:.2f})")
+        elif rank <= 0.2:
+            reasons.append(f"Sounds quite different from the original (audio similarity "
+                           f"{cand.components['sounds_alike']:.2f})")
     reasons.append(f"Length: track {_fmt(track.duration_s)}, cue {_fmt(cue_s)} → {how}")
     if cand.tempo_fit is not None and cand.tempo_fit >= 0.8:
         reasons.append(f"Compatible tempo ({track.tempo_bpm:g} vs {cue.tempo_bpm:g} BPM)")
@@ -192,8 +213,10 @@ class Matcher:
     def __init__(self, model: GameMusicModel, cue_profiles: Dict[str, EffectiveProfile], tracks: List[TrackInfo],
                  settings: MatchSettings, *, rejected: Optional[Dict[str, Set[int]]] = None,
                  fixed: Optional[Dict[str, Optional[int]]] = None, backend: Optional[InferenceBackend] = None,
-                 cue_docs: Optional[Dict[str, Dict[str, Any]]] = None) -> None:
+                 cue_docs: Optional[Dict[str, Dict[str, Any]]] = None,
+                 cue_embeddings: Optional[Dict[str, Any]] = None) -> None:
         self.model = model
+        self.cue_embeddings = cue_embeddings or {}
         self.cue_profiles = cue_profiles
         self.tracks = {t.id: t for t in tracks}
         self.settings = settings
@@ -222,10 +245,11 @@ class Matcher:
                 results[key] = CueResult(key, skipped_reason="The game cue has not been described yet.")
                 continue
             candidates = []
+            alike = self._alike(key)
             for track in self.tracks.values():
                 if track.id in self.rejected.get(key, ()):
                     continue
-                cand = score_candidate(cue, eff.profile, track, explain_now=False)
+                cand = score_candidate(cue, eff.profile, track, explain_now=False, alike=alike.get(track.id))
                 if cand is not None:
                     candidates.append(cand)
             candidates.sort(key=lambda c: (-c.score, c.track_id))
@@ -242,6 +266,23 @@ class Matcher:
         if progress:
             progress("Comparing music", len(cues), len(cues))
         return results
+
+    def _alike(self, key: str) -> Dict[int, Tuple[float, float]]:
+        """Audio similarity of every heard track to this cue: {track id: (cosine, rank 0..1)}."""
+
+        import numpy as np
+
+        cue_emb = self.cue_embeddings.get(key) if self.settings.use_sound else None
+        heard = [t for t in self.tracks.values() if t.embedding is not None]
+        if cue_emb is None or len(heard) < 2:
+            return {}
+        matrix = np.stack([t.embedding for t in heard])
+        if matrix.shape[1] != len(cue_emb):
+            return {}
+        sims = matrix @ cue_emb
+        order = np.argsort(np.argsort(sims))              # 0 = least alike
+        n = len(heard)
+        return {t.id: (float(sims[i]), float(order[i]) / (n - 1)) for i, t in enumerate(heard)}
 
     # ------------------------------------------------------------ AI shortlist
     def _ai_judge(self, cues: List[MusicCue], ranked: Dict[str, List[Candidate]], progress, cancel) -> None:
@@ -315,7 +356,9 @@ class Matcher:
                                                  cand.components.get("coverage", 1.0))
 
 
-def track_infos(tracks: Iterable[Dict[str, Any]], profiles: Dict[str, EffectiveProfile]) -> List[TrackInfo]:
+def track_infos(tracks: Iterable[Dict[str, Any]], profiles: Dict[str, EffectiveProfile],
+                embeddings: Optional[Dict[int, Any]] = None) -> List[TrackInfo]:
+    embeddings = embeddings or {}
     out = []
     for t in tracks:
         if t["status"] != "ok" or t.get("duplicate_of"):
@@ -325,5 +368,5 @@ def track_infos(tracks: Iterable[Dict[str, Any]], profiles: Dict[str, EffectiveP
             continue
         label = " – ".join(x for x in (t.get("artist"), t.get("title") or t["rel_path"].rsplit("/", 1)[-1]) if x)
         out.append(TrackInfo(t["id"], label, float(t["duration_s"]), int(t.get("channels") or 2),
-                             (t.get("features") or {}).get("tempo_bpm"), eff.profile))
+                             (t.get("features") or {}).get("tempo_bpm"), eff.profile, embeddings.get(t["id"])))
     return out

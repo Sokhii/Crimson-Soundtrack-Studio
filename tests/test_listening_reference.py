@@ -53,6 +53,15 @@ def reference():
     return torch, model, processor
 
 
+def _projected(torch, out, projection):
+    """transformers 4.x returns the projected tensor; 5.x a model output whose pooler_output holds it."""
+
+    arr = out if isinstance(out, torch.Tensor) else out.pooler_output
+    if arr.shape[-1] != 512:
+        arr = projection(arr)
+    return arr.numpy()
+
+
 def test_front_end_matches_transformers(ours, reference):
     _torch, _model, processor = reference
     for name, x in _signals().items():
@@ -71,7 +80,7 @@ def test_audio_embeddings_match_pytorch(ours, reference):
     for i, (name, x) in enumerate(signals.items()):
         feats = processor.feature_extractor(x, sampling_rate=48000, return_tensors="pt")
         with torch.no_grad():
-            ref = model.get_audio_features(**feats).numpy()[0]
+            ref = _projected(torch, model.get_audio_features(**feats), model.audio_projection)[0]
         ref = ref / np.linalg.norm(ref)
         cos = float(np.dot(mine[i], ref))
         print(f"audio embedding {name}: cosine(ONNX, PyTorch) = {cos:.5f}")
@@ -90,7 +99,7 @@ def test_text_embeddings_and_tokens_match(ours, reference):
     assert [e.ids[:sum(e.attention_mask)] for e in enc] == [
         ids[:int(m.sum())].tolist() for ids, m in zip(tok["input_ids"], tok["attention_mask"])]
     with torch.no_grad():
-        ref = model.get_text_features(**tok).numpy()
+        ref = _projected(torch, model.get_text_features(**tok), model.text_projection)
     ref = ref / np.linalg.norm(ref, axis=1, keepdims=True)
     cos = np.sum(mine * ref, axis=1)
     print(f"text embeddings (quantized ONNX vs PyTorch): min cosine {cos.min():.4f}, mean {cos.mean():.4f}")

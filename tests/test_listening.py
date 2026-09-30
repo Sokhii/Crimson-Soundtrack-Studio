@@ -144,3 +144,20 @@ def test_delete_listening_model(listening_studio):
     s.delete_listening_model(CLAP_MUSIC_SPEECH.id)
     assert s.settings.listening_model_id == "" and not CLAP_MUSIC_SPEECH.install_dir(s.paths).exists()
     assert not listening_status(s.paths, CLAP_MUSIC_SPEECH, {})["installed"]
+
+
+def test_matching_compares_sound_when_both_sides_were_heard(listening_studio, tmp_path, monkeypatch):
+    from test_game_audio import _fake_decoder
+
+    s = listening_studio
+    game = extract_analyzer_fake_install(tmp_path / "Crimson Desert")
+    s.import_analyzer(ANALYZER_FAKE_INSTALL_DB)
+    s.set_game_path(game)
+    monkeypatch.setenv("CSS_VGMSTREAM", str(_fake_decoder(tmp_path)))
+    assert s.find_matches()["compared_by_sound"] == 0         # listening model off
+    s.select_listening_model(CLAP_MUSIC_SPEECH.id)
+    s.analyze_semantics(use_ai=False)                          # decodes + listens to both sides
+    stats = s.find_matches()
+    assert stats["compared_by_sound"] >= 1 and stats["proposed"] >= 1
+    track_emb, cue_emb = s.sound_embeddings(s.game_model())
+    assert len(track_emb) == 2 and len(cue_emb) >= 1

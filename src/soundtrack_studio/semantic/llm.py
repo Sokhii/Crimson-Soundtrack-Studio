@@ -12,7 +12,7 @@ from .profile import CATEGORIES, ProfileParseError, SemanticProfile, json_schema
 
 log = logging.getLogger(__name__)
 
-PROMPT_VERSION = 1
+PROMPT_VERSION = 2
 
 SYSTEM = (
     "You are an experienced music supervisor. You describe the thematic and emotional character of music so it can "
@@ -23,17 +23,29 @@ SYSTEM = (
     "Do not classify by gameplay situation; describe the music itself. Reply with JSON only."
 )
 
+HEARD_RULES = (
+    " If the evidence has 'heard', a listening model listened to the audio itself: trust what it heard over names, "
+    "tags and genre (strong = clearly present, moderate = likely)."
+)
+VOCAL_RULES = (
+    " vocal_presence: if 'heard' says 'sung vocals' use true, if it says 'instrumental' use false. Otherwise use true "
+    "only when the title or tags clearly show sung lyrics (e.g. a credited vocalist or singer), false only when they "
+    "clearly say instrumental, and null in every other case. A genre, a soundtrack or OST album, an artist's name or "
+    "an epic-sounding title is NOT evidence of vocals. Choirs and wordless voices belong in instrumentation."
+)
 TRACK_INSTRUCTIONS = (
     "Describe this music track from the user's library. The measurements come from signal analysis: "
-    "'energy_index' and 'brightness_index' are 0-1 heuristics; tempo is an estimate and may be missing. "
-    "vocal_presence: true if the track has sung vocals, false if instrumental, null if you cannot tell."
+    "'energy_index' and 'brightness_index' are 0-1 heuristics; tempo is an estimate and may be missing."
+    + HEARD_RULES + VOCAL_RULES
 )
 
 CUE_INSTRUCTIONS = (
     "Describe this piece of music from the video game Crimson Desert (a dark, grounded medieval-fantasy open world). "
     "Nobody can listen to it here: the evidence is its Wwise structure and internal names (region/state names, "
     "event names, file names) and sometimes public community notes. Infer its likely musical character from that "
-    "evidence and state your confidence honestly. vocal_presence: null unless the evidence says so."
+    "evidence and state your confidence honestly. When 'measurements' are present they were measured from the "
+    "decoded game audio and describe its actual sound: prefer them over what names suggest."
+    + HEARD_RULES + " vocal_presence: from 'heard' as above, otherwise null unless the evidence says so."
 )
 
 
@@ -72,8 +84,21 @@ def describe(backend: InferenceBackend, kind: str, doc: Dict[str, Any], retries:
             continue
         profile.source = "llm"
         profile.model_id = backend.model_id
+        apply_heard_vocals(profile, doc)
         return profile
     raise ProfileParseError(str(last_error))
+
+
+def apply_heard_vocals(profile: SemanticProfile, doc: Dict[str, Any]) -> None:
+    """What the listening model heard decides vocal presence; the text model cannot hear."""
+
+    vocals = (doc.get("heard") or {}).get("vocals")
+    if vocals == "sung vocals":
+        profile.vocal_presence = True
+    elif vocals == "instrumental":
+        profile.vocal_presence = False
+        if "solo voice" in profile.instrumentation:
+            profile.instrumentation.remove("solo voice")
 
 
 RERANK_SYSTEM = (

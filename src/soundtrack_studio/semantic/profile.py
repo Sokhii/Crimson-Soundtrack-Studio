@@ -44,7 +44,7 @@ SYNONYMS = {
     "happy": "hopeful", "joyful": "playful", "uplifting": "hopeful", "angry": "aggressive", "brooding": "dark",
     "grim": "somber", "majestic": "epic", "grand": "epic", "powerful": "epic", "noble": "heroic", "sorrowful": "melancholic",
     "orchestral strings": "strings", "string section": "strings", "synth": "synthesizer", "synths": "synthesizer",
-    "vocals": "solo voice", "voice": "solo voice", "drum": "drums", "beats": "electronic beats",
+    "drum": "drums", "beats": "electronic beats",
     "pads": "ambient pads", "full orchestra": "orchestra", "symphonic": "orchestral", "film score": "cinematic",
     "soundtrack": "cinematic", "score": "cinematic", "folk instruments": "ethnic instruments",
     "suspense": "suspense", "fearful": "fear", "awe-inspiring": "awe", "atmosphere": "atmospheric",

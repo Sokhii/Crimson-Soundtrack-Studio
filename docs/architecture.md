@@ -141,10 +141,28 @@ account name are redacted, music tags are not logged; `logs/crash.log` receives 
   sources are comparable. Precedence: user override > local AI > rules. Runs commit per item (resumable) and
   share a response cache across projects (`data/cache/ai_responses.sqlite3`).
 
+## Game audio and the listening model
+
+- `gameaudio/` reads each game music source through the Analyzer's records (a streamed `.wem` from the archives,
+  or the copy embedded in a soundbank's `DATA` section), verifies it against the Analyzer's hash, decodes it with
+  the bundled vgmstream into `temp/gameaudio/`, measures it with the same `library.features` analysis as user
+  tracks, and deletes the temp files. Results are cached in `data/cache/game_audio.sqlite3` by content hash, so
+  all projects and re-imported databases of the same game version share them. A cue's audio is its primary track's
+  longest decoded source.
+- `listening/` is optional. CLAP runs through ONNX Runtime (DirectML on Windows, CPU fallback); its audio front end
+  is a NumPy re-implementation of transformers' `ClapFeatureExtractor`. Each file contributes up to six ten-second
+  excerpts (read by seeking); only the mean embedding is stored (`data/cache/listening.sqlite3` for tracks, the
+  game-audio cache for game music). *Heard* tags (profile vocabulary, vocals vs instrumental) are computed from the
+  embedding and cached prompt embeddings; matching uses embedding similarity ("sounds alike").
+- Evidence documents gain `measurements` (cues) and `heard` (both) only when available, so descriptions of
+  unchanged evidence keep their cache keys. The text model is told that heard evidence beats names and tags, and
+  vocal presence comes from listening (or clear tags), never from genre or album type.
+
 ## Matching
 
 Unit: the MusicSegment (see `docs/research/modding_format.md`). Deterministic eligibility and filtering,
-coverage-aware semantic similarity (agreement on few attributes is weak evidence), duration and tempo fit,
+coverage-aware semantic similarity (agreement on few attributes is weak evidence), "sounds alike" when the
+listening model heard both sides (rank of the audio-embedding similarity within the library), duration and tempo fit,
 optional local-AI judgement of the top five only, then a diversity-aware assignment with a reuse limit.
 Every proposal carries reasons, warnings and a confidence that accounts for evidence quality. Only cues the
 user accepts or chooses form the build mapping.

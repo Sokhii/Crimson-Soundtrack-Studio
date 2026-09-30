@@ -8,11 +8,17 @@
 | 4 Matching | per-segment matching: eligibility and length filtering, coverage-aware semantic similarity + duration/tempo fit, optional local-AI judgement of the shortlist only, diversity-aware assignment, confidence with uncertainty warnings, Matching review page (accept / reject / choose / keep original / fit mode), decisions that reruns never change | **done** |
 | 5 Compiler research | DMM/CDUMM package formats, 2.0 overlay-slot change, archive reading, v150 source layout, Wwise PCM layout, prefetch implications; evidence with trust labels in `docs/research/modding_format.md` | **done** |
 | 6 Compiler | segment-timeline rendering (resample, fit, loudness), PCM WEMs, verified bank reading and patching (PCM codec, streaming, DIDX/DATA rebuild, twin banks), file-replacement package (Crimson Browser manifest or package folders), independent validation (and vgmstream cross-check in tests), build history, Build page | **done** (in-game test pending: no game in the development environment) |
+| 8 Listening | read-only decoding and measurement of the game's own music (vgmstream, bundled), optional CLAP listening model alongside the description models (instruments, vocals, mood, style; "sounds alike" in matching), descriptions that trust what was heard over names and tags | **done** (verified against the reference implementation in CI; in-game audio decoding to be confirmed with "Test decoding") |
 | 7 Release | llama.cpp runtime bundled and tested in the Windows build, self-test covering a real build, portability checks on the frozen EXE, versioning (0.9.0), documentation | **done** (1.0 after in-game verification) |
 
 ## Decisions still open (need evidence)
 
 - **Replacement granularity**: decided: the MusicSegment (see docs/research/modding_format.md). Grouping the segments of one continuous playlist onto one song is a possible later refinement.
+- **Game audio decoding on a real installation**: vgmstream decodes Wwise Vorbis in general and CDMW uses it for
+  this game; the Studio's own tests could only use placeholder and PCM files. "Test decoding" on the Game Data page
+  confirms it on a real install.
+- **Listening thresholds**: the vocal/instrumental cut-offs were checked on public-domain recordings in CI
+  (docs/research/listening.md); they can be tuned without listening again, because only embeddings are stored.
 - **Music outside the interactive hierarchy** (played by plain `Sound` objects): currently reported, not offered as cues.
 - **In-game verification** of the output and of DMM's handling of the Crimson Browser manifest.
 - **Smaller audio**: Wwise ADPCM (about 4x smaller than PCM) once its block layout for this engine is verified.

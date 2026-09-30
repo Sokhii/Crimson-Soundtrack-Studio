@@ -89,13 +89,17 @@ class MatchingPage(QWidget):
         self.match_btn = QPushButton("2. Find matches")
         self.match_btn.clicked.connect(self.find_matches)
         self.use_ai = QCheckBox("Use local AI to judge the best candidates")
+        self.use_sound = QCheckBox("Compare how they sound")
+        self.use_sound.setChecked(True)
+        self.use_sound.setToolTip("When the listening model has heard both a game cue and your tracks, how much a "
+                                  "track sounds like the original counts towards the match.")
         self.allow_reuse = QCheckBox("Allow a track for several cues")
         self.allow_reuse.setChecked(True)
         self.include_short = QCheckBox("Include short/transition cues")
         self.include_short.toggled.connect(lambda _v: self.refresh())
         self.accept_all_btn = QPushButton("Accept all high-confidence")
         self.accept_all_btn.clicked.connect(self.accept_all)
-        for w in (self.describe_btn, self.match_btn, self.use_ai, self.allow_reuse, self.include_short):
+        for w in (self.describe_btn, self.match_btn, self.use_ai, self.use_sound, self.allow_reuse, self.include_short):
             bar.addWidget(w)
         bar.addStretch(1)
         bar.addWidget(self.accept_all_btn)
@@ -170,6 +174,7 @@ class MatchingPage(QWidget):
         has_data = studio.project is not None and studio.project.active_analyzer() is not None
         for w in (self.describe_btn, self.match_btn, self.accept_all_btn):
             w.setEnabled(has_data)
+        self.use_sound.setEnabled(studio.active_listening_model() is not None)
         self.use_ai.setEnabled(studio.active_model() is not None)
         if not self.use_ai.isEnabled():
             self.use_ai.setChecked(False)
@@ -367,7 +372,8 @@ class MatchingPage(QWidget):
 
     def find_matches(self) -> None:
         settings = MatchSettings(include_short_cues=self.include_short.isChecked(),
-                                 allow_reuse=self.allow_reuse.isChecked(), use_ai=self.use_ai.isChecked())
+                                 allow_reuse=self.allow_reuse.isChecked(), use_ai=self.use_ai.isChecked(),
+                                 use_sound=self.use_sound.isChecked())
 
         def done(stats) -> None:
             self._after()

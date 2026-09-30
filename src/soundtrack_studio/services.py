@@ -798,6 +798,24 @@ class Studio:
     def match_store(self) -> MatchStore:
         return MatchStore(self.require_project())
 
+    def sound_embeddings(self, model) -> Tuple[Dict[int, Any], Dict[str, Any]]:
+        """Listening-model embeddings of tracks and cues heard by the *same* model ({} when not listened to)."""
+
+        from .listening.listen import embedding_of
+
+        key = self.listening_key()
+        if not key:
+            return {}, {}
+        tracks = {tid: e for tid, r in self.track_listening().items()
+                  if r.get("model") == key and (e := embedding_of(r)) is not None}
+        cues: Dict[str, Any] = {}
+        audio = self.game_audio_results()
+        for cue in model.cues if audio else []:
+            _measured, heard = self.cue_audio(cue, audio)
+            if heard and heard.get("model") == key and (e := embedding_of(heard)) is not None:
+                cues[str(cue.segment_id)] = e
+        return tracks, cues
+
     def find_matches(self, settings: Optional[MatchSettings] = None, progress=None, cancel=None) -> Dict[str, Any]:
         settings = settings or MatchSettings()
         model = self.game_model()
@@ -814,7 +832,8 @@ class Studio:
             self.analyze_semantics(use_ai=False, progress=progress, cancel=cancel)
             track_profiles = store.effective_all("track")
             cue_profiles = store.effective_all("cue")
-        infos = track_infos(tracks, track_profiles)
+        track_emb, cue_emb = self.sound_embeddings(model) if settings.use_sound else ({}, {})
+        infos = track_infos(tracks, track_profiles, track_emb)
         backend = self.backend() if settings.use_ai else None
         if backend is not None:
             if progress:
@@ -823,11 +842,12 @@ class Studio:
         cue_docs = {str(c.segment_id): cue_document(model, c) for c in model.cues} if backend else {}
         matches = self.match_store()
         matcher = Matcher(model, cue_profiles, infos, settings, rejected=matches.rejected_map(),
-                          fixed=matches.fixed_map(), backend=backend, cue_docs=cue_docs)
+                          fixed=matches.fixed_map(), backend=backend, cue_docs=cue_docs, cue_embeddings=cue_emb)
         results = matcher.run(progress, cancel)
         stats = {"cues": len(results), "proposed": sum(1 for r in results.values() if r.candidates),
                  "unmatched": sum(1 for r in results.values() if not r.candidates), "tracks": len(infos),
-                 "ai_errors": len(matcher.ai_errors)}
+                 "ai_errors": len(matcher.ai_errors),
+                 "compared_by_sound": sum(1 for k in cue_emb if k in results) if len(track_emb) >= 2 else 0}
         matches.save_run(results, settings, backend.model_id if backend else "", stats)
         if matcher.ai_errors:
             self.require_project().add_event("warning", "ai", f"The local AI could not judge {len(matcher.ai_errors)} "

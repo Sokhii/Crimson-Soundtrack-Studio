@@ -10,15 +10,18 @@ registry, Documents, Desktop, Downloads or OneDrive, and no installer is needed.
 Crimson Soundtrack Studio/
 ├── CrimsonSoundtrackStudio.exe      (+ _internal/ with the bundled Python/Qt runtime)
 ├── runtime/llama/                   bundled llama.cpp llama-server (read-only)
+├── runtime/vgmstream/               bundled vgmstream decoder for the game's audio (read-only)
 ├── data/
 │   ├── config/                      settings.json, model_catalog.json, models.json (no registry, no QSettings)
-│   ├── cache/                       audio analysis, game-model and AI-response caches, redirected library caches
+│   ├── cache/                       audio analysis, game-audio, listening, game-model and AI-response caches
 │   └── databases/<hash>/            imported Analyzer database snapshots (read-only) + import.json
 ├── models/{low,medium,high,custom}/ local AI models (downloaded from inside the app, SHA-256 verified)
+├── models/listening/<id>/           optional listening model (ONNX files, SHA-256 verified)
 ├── projects/<name>/project.sqlite3  one folder per project
 ├── output/                          built mods (<name>/ and <name>.zip; the previous build is kept as <name>.previous)
 ├── logs/                            studio.log, crash.log, llama-server.log, selftest.json, portability.json, state.json
-└── temp/                            temporary files; entries older than 24 h are removed at startup
+└── temp/                            temporary files (incl. decoded game audio, deleted after each file);
+                                     entries older than 24 h are removed at startup
 ```
 
 ## How it is enforced
@@ -39,6 +42,10 @@ Crimson Soundtrack Studio/
 - The llama.cpp child process gets `LLAMA_CACHE` inside `data/cache/` and inherits the redirected temp folders.
 - Custom GGUF models the user adds from elsewhere are referenced, not copied; they are external inputs like
   the music folder.
+- Game audio is read from the game archives and decoded by vgmstream *into* `temp/gameaudio/`; the files are
+  deleted as soon as they are measured. The game folder is only read.
+- The listening model runs in-process with ONNX Runtime; on Windows its DirectML provider uses the graphics
+  driver (like the Vulkan llama.cpp runtime, the driver may keep its own shader cache).
 
 ## Verification
 

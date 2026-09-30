@@ -177,3 +177,34 @@ def test_forget_missing(store):
     store.run("track", ITEMS)
     assert store.forget_missing("track", ["1"]) == 1
     assert set(store.effective_all("track")) == {"1"}
+
+
+def test_heard_evidence_decides_vocals_and_feeds_rules():
+    import json as _json
+
+    from soundtrack_studio.semantic import llm
+
+    heard = {"source": "listening model (CLAP)", "vocals": "instrumental", "vocals_margin": -0.04,
+             "instrumentation": {"strings": "strong", "choir": "moderate"}, "mood": {"melancholic": "strong"}}
+    doc = {"title": "Epic Vocal Anthem", "genre": "Soundtrack", "heard": heard}
+    # the text model claims vocals from the title/genre; what was heard wins
+    claims = _json.loads(GOOD)
+    claims.update(vocal_presence=True, instrumentation=["solo voice", "strings"])
+    profile = llm.describe(ScriptedBackend([_json.dumps(claims)]), "track", doc)
+    assert profile.vocal_presence is False and "solo voice" not in profile.instrumentation
+    sung = llm.describe(ScriptedBackend([_json.dumps(claims)]), "track", {**doc, "heard": {**heard, "vocals": "sung vocals"}})
+    assert sung.vocal_presence is True
+    unclear = dict(claims, vocal_presence=None)
+    assert llm.describe(ScriptedBackend([_json.dumps(unclear)]), "track",
+                        {**doc, "heard": {**heard, "vocals": "unclear"}}).vocal_presence is None
+    # rules use heard tags for tracks and cues
+    p, evidence = rules.describe_track(doc)
+    assert "strings" in p.instrumentation and "melancholic" in p.mood and p.vocal_presence is False
+    assert any(e.startswith("heard") for e in evidence)
+    c, _ = rules.describe_cue({"structure_names": ["Field_A"], "heard": heard,
+                               "measurements": {"energy_index": 0.2, "brightness_index": 0.3}})
+    assert "strings" in c.instrumentation and c.energy == 0.2 and "decoded audio" in c.summary
+    # instructions tell the text model what counts as evidence of vocals
+    text = llm.build_messages("track", doc)[1]["content"]
+    assert "NOT evidence of vocals" in text and "listening model" in text
+    assert llm.PROMPT_VERSION == 2

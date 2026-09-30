@@ -12,6 +12,8 @@ Crimson Soundtrack Studio is MIT-licensed (see `LICENSE`). The portable build bu
 | [python-lz4](https://github.com/python-lz4/python-lz4) | BSD-3-Clause | LZ4 decompression of game archive entries |
 | [libsndfile](https://libsndfile.github.io/libsndfile/) (bundled by soundfile, with FLAC/Ogg/Vorbis/Opus) | LGPL-2.1 (FLAC/Ogg/Vorbis: BSD-style) | audio decoding; shipped as a separate shared library |
 | [llama.cpp](https://github.com/ggml-org/llama.cpp) (`runtime/llama/`) | MIT | local AI runtime (separate program) |
+| [ONNX Runtime](https://onnxruntime.ai/) (DirectML build on Windows, incl. `DirectML.dll`) | MIT | optional listening model |
+| [tokenizers](https://github.com/huggingface/tokenizers) | Apache-2.0 | listening model text prompts |
 | [vgmstream](https://github.com/vgmstream/vgmstream) (`runtime/vgmstream/`) | ISC-style; its bundled decoder libraries under their own licences (libvorbis/libogg: BSD; mpg123, FFmpeg: LGPL, as separate DLLs) | decodes the game's Wwise audio for the read-only game-audio analysis (separate program) |
 
 No GPL-licensed code is bundled (LGPL libraries are shipped as separate, replaceable shared libraries). FLAC metadata is read by the Studio's own parser
@@ -21,3 +23,5 @@ The Analyzer schema file `src/soundtrack_studio/testing/analyzer_schema_v1.sql` 
 [Crimson Desert Analyzer](https://github.com/Sokhii/Crimson-Desert-Analyzer) (MIT, same author).
 
 No game files, music recordings or AI model weights are included in this repository or in releases.
+The optional listening model (LAION CLAP `larger_clap_music_and_speech`, Apache-2.0, ONNX export by Xenova) is
+downloaded from inside the application.
