@@ -106,54 +106,96 @@ def test_text_embeddings_and_tokens_match(ours, reference):
     assert cos.min() > 0.999
 
 
+GENRE_PAIRS = [
+    ("a pop song with a singer", "an instrumental pop song"),
+    ("a rock song with a singer", "an instrumental rock song"),
+    ("electronic dance music with a singer", "instrumental electronic dance music"),
+    ("an anime song with a female singer", "instrumental anime music"),
+    ("a ballad sung by a singer", "an instrumental ballad"),
+    ("orchestral music with a singer", "orchestral music without singing"),
+    ("a folk song with a singer", "instrumental folk music"),
+    ("a jazz song with a singer", "instrumental jazz"),
+    ("a song sung by a synthesized singing voice", "synthesizer music without vocals"),
+    ("a hip hop song with a rapper", "an instrumental hip hop beat"),
+]
+SIMPLE_PAIRS = [("a song with vocals", "a song without vocals"), ("singing", "no singing"),
+                ("music with a singer", "music without a singer")]
+
+
 def test_public_domain_recordings_report(ours, tmp_path):
-    """Diagnostics: per-excerpt vocal margins and heard tags on real recordings listed in CSS_CLAP_SAMPLES (JSON),
-    plus spliced 'instrumental intro, then singing' files like a typical song."""
+    """Diagnostics: compares vocal-detection strategies per excerpt on real recordings (CSS_CLAP_SAMPLES, JSON)
+    and on spliced 'instrumental intro, then singing' files like a typical song. Prints only."""
 
     import soundfile as sf
 
-    from soundtrack_studio.listening.listen import PromptBank, all_prompts, listen_file
+    from soundtrack_studio.compiler.audio import resample
+    from soundtrack_studio.listening.listen import PromptBank, all_prompts, excerpt_embeddings, listen_file
 
     samples = json.loads(os.environ.get("CSS_CLAP_SAMPLES", "[]"))
     if not samples:
         pytest.skip("no sample recordings downloaded")
-    prompts = all_prompts()
-    bank = PromptBank(dict(zip(prompts, ours.embed_text(prompts))))
-    # splice: 40 s of an instrumental piece, then 20 s of a vocal recording (expected: sung vocals)
-    vocal_files = [s_ for s_ in samples if s_["label"] == "vocals"]
-    inst_files = [s_ for s_ in samples if s_["label"] == "instrumental"]
-    for i, (v, n) in enumerate(zip(vocal_files[:3], inst_files[:3])):
+    extra = [p for pair in GENRE_PAIRS + SIMPLE_PAIRS for p in pair]
+    prompts = list(dict.fromkeys(all_prompts() + extra))
+    vectors = dict(zip(prompts, ours.embed_text(prompts)))
+    bank = PromptBank(vectors)
+
+    def load48(path, seconds=None, start_frac=0.0):
+        data, rate = sf.read(path, dtype="float32", always_2d=True)
+        mono = resample(data.mean(axis=1, keepdims=True), rate, 48000)[:, 0]
+        a = int(len(mono) * start_frac)
+        return mono[a:a + int(seconds * 48000)] if seconds else mono
+
+    vocal_files = [x for x in samples if x["label"] == "vocals"]
+    inst_files = [x for x in samples if x["label"] == "instrumental"]
+    for i, (v, n) in enumerate(zip(vocal_files[:4], inst_files[:4])):
         try:
-            a, ra = sf.read(n["path"], dtype="float32", always_2d=True)
-            b, rb = sf.read(v["path"], dtype="float32", always_2d=True)
+            mix = np.concatenate([load48(n["path"], 40), load48(v["path"], 20, 1 / 3)])
         except Exception as exc:  # noqa: BLE001 - diagnostics only
             print(f"splice {i}: {exc}")
             continue
-        if ra != rb:
-            continue
-        mix = np.concatenate([a[:40 * ra].mean(axis=1), b[len(b) // 3: len(b) // 3 + 20 * rb].mean(axis=1)])
         path = tmp_path / f"spliced_{i}.wav"
-        sf.write(str(path), mix, ra)
-        samples.append({"label": "vocals (spliced: 40 s instrumental + 20 s singing)", "path": str(path)})
-    tally = {}
+        sf.write(str(path), mix, 48000)
+        samples.append({"label": "vocals", "title": f"SPLICE 40 s {n['title']} + 20 s {v['title']}", "path": str(path)})
+
+    def s1(e):
+        return bank.vocal_margin(e)
+
+    def s2(e):
+        pairs = [(float(e @ vectors[a]), float(e @ vectors[b])) for a, b in GENRE_PAIRS]
+        best = sorted(pairs, key=lambda p: -max(p))[:3]
+        return float(np.mean([a - b for a, b in best]))
+
+    def s3(e):
+        return float(np.mean([float(e @ vectors[a]) - float(e @ vectors[b]) for a, b in SIMPLE_PAIRS]))
+
+    strategies = {"S1 current": s1, "S2 genre-matched": s2, "S3 simple pairs": s3}
+    rows = []
     for item in samples:
         try:
             result = listen_file(ours, Path(item["path"]), "reference")
         except Exception as exc:  # noqa: BLE001
-            print(f"[{item['label']}] {Path(item['path']).name}: unreadable ({exc})")
+            print(f"[{item['label']}] {item.get('title')}: unreadable ({exc})")
             continue
-        summary = bank.summary(result)
-        verdict = summary.get("vocals")
-        expected = {"vocals": "sung vocals", "instrumental": "instrumental"}.get(item["label"].split(" ")[0])
-        ok = expected is None or verdict == expected
-        key = item["label"].split(" ")[0]
-        good, total = tally.get(key, (0, 0))
-        tally[key] = (good + (verdict == expected), total + 1) if expected else (0, total + 1)
-        print(f"[{item['label']}] {item.get('title') or Path(item['path']).name}: vocals={verdict} "
-              f"({summary.get('vocals_excerpts')}) margins={summary.get('vocals_margins')} "
-              f"{'' if ok else '  <-- MISMATCH'} instruments={summary.get('instrumentation')}")
-    for key, (good, total) in tally.items():
-        print(f"TALLY {key}: {good}/{total} as expected" if key != "choir" else f"TALLY choir: {total} (report only)")
+        exc_emb = excerpt_embeddings(result)
+        margins = {name: [f(e) for e in exc_emb] for name, f in strategies.items()}
+        rows.append((item, margins))
+        print(f"[{item['label']}] {item.get('title')}: " + " | ".join(
+            f"{name}: {[round(m, 3) for m in ms]}" for name, ms in margins.items()))
+    for name in strategies:
+        for tv in (-0.03, -0.02, -0.01, 0.0, 0.01, 0.02, 0.03):
+            vok = vtot = iok = itot = 0
+            for item, margins in rows:
+                ms = margins[name]
+                if not ms:
+                    continue
+                sung = sum(1 for m in ms if m > tv) >= max(1, int(np.ceil(len(ms) / 3 - 1e-9)))
+                if item["label"] == "vocals":
+                    vtot += 1
+                    vok += sung
+                elif item["label"] == "instrumental":
+                    itot += 1
+                    iok += not sung
+            print(f"TALLY {name} threshold {tv:+.2f}: vocals found {vok}/{vtot}, instrumentals kept {iok}/{itot}")
 
 
 def test_text_variants_diagnostics(model_dir, reference):

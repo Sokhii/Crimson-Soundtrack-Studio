@@ -17,9 +17,10 @@ from pathlib import Path
 
 API = "https://commons.wikimedia.org/w/api.php"
 QUERIES = {
-    "vocals": ["Enrico Caruso", "Billy Murray singer", "Ada Jones", "Vocaloid", "J-pop song", "pop song vocals",
-               "rock song vocals"],
-    "instrumental": ["Musopen", "Scott Joplin rag", "Kevin MacLeod", "orchestral film score", "epic orchestral"],
+    "vocals": ["Enrico Caruso", "Billy Murray singer", "Ada Jones", "Vocaloid", "vocal pop music made with AI",
+               "Suno AI song", "song with lyrics pop", "rock song vocals", "Brad Sucks", "Jonathan Coulton"],
+    "instrumental": ["Musopen", "Scott Joplin rag", "Kevin MacLeod", "instrumental music", "chiptune",
+                     "epic orchestral", "instrumental rock", "electronic instrumental"],
     "choir": ["Gregorian chant", "choir orchestra"],
 }
 HEADERS = {"User-Agent": "CrimsonSoundtrackStudio-CI/1.0 (https://github.com/Sokhii/Crimson-Soundtrack-Studio)"}
@@ -53,7 +54,7 @@ def main() -> int:
             for page in sorted((data.get("query") or {}).get("pages", {}).values(), key=lambda p: p.get("index", 0)):
                 info = (page.get("imageinfo") or [{}])[0]
                 if info.get("mime") not in ("application/ogg", "audio/ogg", "audio/x-flac", "audio/flac", "audio/wav",
-                                            "audio/x-wav") or not 200_000 < info.get("size", 0) < 20_000_000:
+                                            "audio/x-wav", "audio/mpeg") or not 200_000 < info.get("size", 0) < 20_000_000:
                     continue
                 name = f"{label}_{len(samples):02d}{Path(urllib.parse.urlparse(info['url']).path).suffix}"
                 try:
@@ -61,7 +62,10 @@ def main() -> int:
                 except Exception as exc:  # noqa: BLE001
                     print(f"download failed: {info['url']}: {exc}")
                     continue
-                samples.append({"label": label, "path": str(dest / name), "title": page.get("title")})
+                title = page.get("title") or ""
+                # the title decides when it says so (e.g. "Tochigi anthem (instrumental; J-Pop)")
+                real = "instrumental" if "instrumental" in title.lower() else label
+                samples.append({"label": real, "path": str(dest / name), "title": title})
                 print(f"{label}: {page.get('title')}")
                 taken += 1
                 if taken >= args.per_query:
