@@ -1,0 +1,5 @@
+# Runtime dependencies (bundled into the portable build; users install nothing).
+# Keep this list licence-compatible with MIT distribution: no GPL packages.
+PySide6-Essentials>=6.7,<7   # LGPL-3.0, dynamically linked in the one-folder build
+numpy>=1.26                  # BSD-3-Clause
+soundfile>=0.12              # BSD-3-Clause (bundles libsndfile, LGPL-2.1, as a shared library)

@@ -1,0 +1,78 @@
+name: windows-portable
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install -r requirements-dev.txt
+      - name: Unit tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -m pytest -q
+      - name: Build application folder (PyInstaller, one-folder)
+        run: pyinstaller packaging/CrimsonSoundtrackStudio.spec --noconfirm --clean
+      - name: Portability - self-test, GUI start and outside-write check from a moved copy
+        shell: pwsh
+        run: |
+          $d = Join-Path $env:RUNNER_TEMP "D\Crimson Soundtrack Studio"
+          New-Item -ItemType Directory -Force -Path (Split-Path $d) | Out-Null
+          Copy-Item -Recurse dist/CrimsonSoundtrackStudio $d
+          $exe = Join-Path $d "CrimsonSoundtrackStudio.exe"
+          # launched from an unrelated working directory: the root must come from the EXE location
+          Push-Location $env:RUNNER_TEMP
+          # the portability check runs (and cleans up) its own self-test, so it goes first;
+          # the kept self-test afterwards leaves a project, models and output for the copy test below
+          $q = Start-Process -FilePath $exe -ArgumentList "--portability-check" -Wait -PassThru
+          $p = Start-Process -FilePath $exe -ArgumentList "--selftest","--keep" -Wait -PassThru
+          Pop-Location
+          Get-Content (Join-Path $d "logs\selftest.json")
+          Get-Content (Join-Path $d "logs\portability.json")
+          if ($p.ExitCode -ne 0) { throw "self test failed ($($p.ExitCode))" }
+          if ($q.ExitCode -ne 0) { throw "portability check failed ($($q.ExitCode))" }
+          foreach ($rel in "data\config\settings.json","projects\__selftest__\project.sqlite3","logs\studio.log","data\cache\audio_analysis.sqlite3") {
+            if (-not (Test-Path (Join-Path $d $rel))) { throw "$rel was not created beside the EXE" }
+          }
+      - name: Portability - copy the folder elsewhere and check it keeps its state
+        shell: pwsh
+        run: |
+          $d = Join-Path $env:RUNNER_TEMP "D\Crimson Soundtrack Studio"
+          $e = Join-Path $env:RUNNER_TEMP "E\Tools\Crimson Soundtrack Studio"
+          New-Item -ItemType Directory -Force -Path (Split-Path $e) | Out-Null
+          Copy-Item -Recurse $d $e
+          Push-Location $env:RUNNER_TEMP
+          $p = Start-Process -FilePath (Join-Path $e "CrimsonSoundtrackStudio.exe") -ArgumentList "--print-state" -Wait -PassThru
+          Pop-Location
+          $state = Get-Content (Join-Path $e "logs\state.json") -Raw | ConvertFrom-Json
+          $state | ConvertTo-Json -Depth 5
+          if ($p.ExitCode -ne 0) { throw "print-state failed" }
+          if (-not $state.last_project_resolves) { throw "copied folder lost its last project" }
+          if ($state.projects.Count -lt 1) { throw "copied folder lost its projects" }
+          if (-not ($state.models -contains "models/custom/.selftest-probe")) { throw "copied folder lost its models" }
+          if ($state.root -notlike "*\E\Tools\*") { throw "root was not taken from the EXE location: $($state.root)" }
+      - name: Package portable ZIP
+        run: python tools/build_portable.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CrimsonSoundtrackStudio-windows-portable
+          path: dist/CrimsonSoundtrackStudio-*-windows-portable.zip
+          if-no-files-found: error
+      - name: Publish release (tags only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/CrimsonSoundtrackStudio-*-windows-portable.zip
