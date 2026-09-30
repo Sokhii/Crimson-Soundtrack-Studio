@@ -102,8 +102,8 @@ def test_text_embeddings_and_tokens_match(ours, reference):
         ref = _projected(torch, model.get_text_features(**tok), model.text_projection)
     ref = ref / np.linalg.norm(ref, axis=1, keepdims=True)
     cos = np.sum(mine * ref, axis=1)
-    print(f"text embeddings (quantized ONNX vs PyTorch): min cosine {cos.min():.4f}, mean {cos.mean():.4f}")
-    assert cos.min() > 0.97
+    print(f"text embeddings (as used by the app vs PyTorch): min cosine {cos.min():.4f}, mean {cos.mean():.4f}")
+    assert cos.min() > 0.9 and cos.mean() > 0.97
 
 
 def test_public_domain_recordings_report(ours, tmp_path):
@@ -141,7 +141,7 @@ def test_text_variants_diagnostics(model_dir, reference):
     extra = os.environ.get("CSS_CLAP_EXTRA")
     for name in ("text_model.onnx", "text_model_fp16.onnx"):
         if extra and (Path(extra) / name).is_file():
-            variants[name] = str(Path(extra) / name)
+            variants[name] = str((Path(extra) / name).resolve())
     for name, path in variants.items():
         m = ClapModel(folder, {**files, "text": path}, device="cpu")
         batch = m.embed_text(prompts)

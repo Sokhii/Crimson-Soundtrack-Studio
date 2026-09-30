@@ -128,7 +128,10 @@ class ClapModel:
             self._tokenizer.enable_truncation(max_length=512)
         return self._text
 
-    def embed_text(self, texts: Sequence[str], batch_size: int = 32) -> np.ndarray:
+    def embed_text(self, texts: Sequence[str], batch_size: int = 1) -> np.ndarray:
+        """Normalised text embeddings. One prompt per run by default: the ONNX text tower mishandles padding
+        (measured against PyTorch in CI: batched min cosine 0.63, one at a time 0.92, mean 0.98)."""
+
         session = self._text_session()
         names = {i.name for i in session.get_inputs()}
         out = []
