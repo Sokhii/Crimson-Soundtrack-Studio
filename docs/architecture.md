@@ -25,10 +25,10 @@ Analyzer and never writes to Analyzer data.
                                                        │ worker threads (ui/workers.py)
                                             services.Studio  (coordination only)
           ┌──────────────┬───────────────┬─────────────┼───────────────┬────────────────┬──────────────┐
-   project/store   analyzer_db/     analyzer_db/    game_model/      library/          (Phase 3+)
-   (project DB)    importer +       reader +        builder +        formats · flac_meta  ai/ matching/
-                   validator        compat          model (cues)     features · scanner   review/ compiler/
-                   (snapshot)       (read-only)     (cached)         cache
+   project/store   analyzer_db/     game_model/     library/        ai/            semantic/      matching/     compiler/
+   (project DB)    import·validate  builder+model   scan·features   catalog·dl     profile·rules  engine        plan·audio·wem
+                   reader·compat    (cached cues)   flac·cache      runtime        llm·store      store         bnk·archive·
+                   (read-only)                                      (llama.cpp)                   (decisions)   build·validate
           └──────────────┴───────────────┴──────── app_paths · environment · config · logging_setup ─────┘
 ```
 
@@ -40,6 +40,10 @@ Analyzer and never writes to Analyzer data.
 | `project` | project database: settings, references, library facts, events | depend on the compiler or AI |
 | `library` | format handlers, metadata, deterministic analysis, cache, scanning | modify user files |
 | `services` | orchestrates the above for UI/CLI | contain parsing or analysis logic |
+| `ai` | model catalog/registry, hardware estimate, verified downloads, llama-server backend | know about music or projects |
+| `semantic` | profile schema, evidence documents, rules, LLM prompts, resumable storage | touch the GUI or the compiler |
+| `matching` | candidate filtering, scoring, assignment; proposals vs user decisions | override user decisions |
+| `compiler` | read-only game access, audio rendering, PCM WEMs, bank patching, packaging, validation | write outside `temp/`/`output/`, modify the game |
 | `ui` | widgets | contain business logic or SQL |
 
 Each component can be replaced independently: e.g. a new audio format is a new `AudioFormatHandler`, a new
@@ -99,8 +103,9 @@ single file that is safe to copy when the program is closed.
 | `track_features` | deterministic signal measurements (never AI output) |
 | `project_event` | user-visible warnings/errors |
 
-Later phases add, in separate tables, AI semantic metadata, proposed matches, user overrides (which always
-take precedence), build configuration and build history.
+| `semantic_profile`, `semantic_override` (format 2) | interpretations per source (`rules`, `llm` + model and prompt version + evidence hash) and the user's edits |
+| `match_run`, `match_proposal`, `match_decision` (format 3) | machine proposals (recomputed) and user decisions (never touched by reruns) |
+| `build` (format 4) | build history: settings, output location, validation summary, errors |
 
 ## Music library analysis
 
@@ -123,3 +128,32 @@ take precedence), build configuration and build history.
 User-facing errors are `StudioError` subclasses with a title, plain message, hint and technical details
 (shown in an expandable section and logged). Logs rotate in `logs/studio.log`; the user's home folder and
 account name are redacted, music tags are not logged; `logs/crash.log` receives fatal tracebacks.
+
+## Local AI and semantic descriptions
+
+- `ai/` owns a `llama-server` child process (bundled in `runtime/llama/`) bound to 127.0.0.1, with GPU-offload
+  fallbacks, JSON-schema-constrained output and handling of cut-off answers. Models are catalog data
+  (`data/config/model_catalog.json`), stored in `models/<tier>/<id>/`, downloaded resumably and verified
+  against the Hugging Face SHA-256. Hardware detection only reads OS information (no PowerShell/WMI, which
+  write caches into the user profile).
+- `semantic/` builds an *evidence document* per track (tags, measurements) and per cue (Wwise names, states,
+  events, structure, community notes); its hash is the cache key. Profiles use controlled vocabularies so
+  sources are comparable. Precedence: user override > local AI > rules. Runs commit per item (resumable) and
+  share a response cache across projects (`data/cache/ai_responses.sqlite3`).
+
+## Matching
+
+Unit: the MusicSegment (see `docs/research/modding_format.md`). Deterministic eligibility and filtering,
+coverage-aware semantic similarity (agreement on few attributes is weak evidence), duration and tempo fit,
+optional local-AI judgement of the top five only, then a diversity-aware assignment with a reuse limit.
+Every proposal carries reasons, warnings and a confidence that accounts for evidence quality. Only cues the
+user accepts or chooses form the build mapping.
+
+## Compiler
+
+`plan` (primary track gets the music, other layers silence; all banks holding a source, including twins) →
+`audio` (decode, polyphase resample to 48 kHz, channel mapping, trim/loop/pad with fades, loudness
+normalisation, timeline slicing per clip) → `wem` (Wwise PCM) → `archive` (read original banks through the
+Analyzer's entry records, verify SHA-1) → `bnk` (patch source fields in place, rebuild `DIDX`/`DATA`) →
+`build` (workspace in `temp/`, manifest/README/report) → `validate` (independent re-read of everything) →
+`output/<mod name>/`. Any disagreement between the game files and the Analyzer data aborts the build.

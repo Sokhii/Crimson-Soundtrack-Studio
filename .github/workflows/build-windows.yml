@@ -2,7 +2,7 @@ name: windows-portable
 
 on:
   push:
-    branches: [main]
+    branches: [main, "claude/**"]
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
@@ -20,12 +20,20 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: python -m pip install -r requirements-dev.txt
-      - name: Unit tests
+      - name: Fetch the llama.cpp runtime (Vulkan build, CPU fallback included)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python tools/fetch_llama_runtime.py --dest vendor/llama-runtime --flavor vulkan
+      - name: Unit tests (including the real llama.cpp runtime end to end)
         env:
           QT_QPA_PLATFORM: offscreen
-        run: python -m pytest -q
+          CSS_LLAMA_SERVER: ${{ github.workspace }}\vendor\llama-runtime\llama-server.exe
+        run: python -m pytest -q -rs
       - name: Build application folder (PyInstaller, one-folder)
         run: pyinstaller packaging/CrimsonSoundtrackStudio.spec --noconfirm --clean
+      - name: Bundle the llama.cpp runtime next to the EXE
+        shell: pwsh
+        run: Copy-Item -Recurse vendor/llama-runtime dist/CrimsonSoundtrackStudio/runtime/llama
       - name: Portability - self-test, GUI start and outside-write check from a moved copy
         shell: pwsh
         run: |
@@ -64,6 +72,17 @@ jobs:
           if ($state.projects.Count -lt 1) { throw "copied folder lost its projects" }
           if (-not ($state.models -contains "models/custom/.selftest-probe")) { throw "copied folder lost its models" }
           if ($state.root -notlike "*\E\Tools\*") { throw "root was not taken from the EXE location: $($state.root)" }
+      - name: Frozen EXE starts the bundled AI runtime with a model
+        shell: pwsh
+        run: |
+          $e = Join-Path $env:RUNNER_TEMP "E\Tools\Crimson Soundtrack Studio"
+          $model = Join-Path $env:RUNNER_TEMP "tiny-test.gguf"
+          python tools/make_tiny_gguf.py $model
+          Push-Location $env:RUNNER_TEMP
+          $p = Start-Process -FilePath (Join-Path $e "CrimsonSoundtrackStudio.exe") -ArgumentList "--ai-check",$model -Wait -PassThru
+          Pop-Location
+          Get-Content (Join-Path $e "logs\ai_check.json")
+          if ($p.ExitCode -ne 0) { throw "AI runtime check failed" }
       - name: Package portable ZIP
         run: python tools/build_portable.py
       - uses: actions/upload-artifact@v4

@@ -24,3 +24,4 @@ dev_home/
 *.sqlite3-wal
 *.sqlite3-shm
 *.sqlite3-journal
+vendor/

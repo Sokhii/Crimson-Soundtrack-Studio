@@ -8,12 +8,14 @@
 | 4 Matching | per-segment matching: eligibility and length filtering, coverage-aware semantic similarity + duration/tempo fit, optional local-AI judgement of the shortlist only, diversity-aware assignment, confidence with uncertainty warnings, Matching review page (accept / reject / choose / keep original / fit mode), decisions that reruns never change | **done** |
 | 5 Compiler research | DMM/CDUMM package formats, 2.0 overlay-slot change, archive reading, v150 source layout, Wwise PCM layout, prefetch implications; evidence with trust labels in `docs/research/modding_format.md` | **done** |
 | 6 Compiler | segment-timeline rendering (resample, fit, loudness), PCM WEMs, verified bank reading and patching (PCM codec, streaming, DIDX/DATA rebuild, twin banks), file-replacement package (Crimson Browser manifest or package folders), independent validation (and vgmstream cross-check in tests), build history, Build page | **done** (in-game test pending: no game in the development environment) |
-| 7 Release | end-to-end tests, versioning, release packaging, documentation | CI + portable ZIP already in place |
+| 7 Release | llama.cpp runtime bundled and tested in the Windows build, self-test covering a real build, portability checks on the frozen EXE, versioning (0.9.0), documentation | **done** (1.0 after in-game verification) |
 
 ## Decisions still open (need evidence)
 
 - **Replacement granularity**: decided: the MusicSegment (see docs/research/modding_format.md). Grouping the segments of one continuous playlist onto one song is a possible later refinement.
-- **Music outside the interactive hierarchy** (played by plain `Sound` objects): include as cues or not.
+- **Music outside the interactive hierarchy** (played by plain `Sound` objects): currently reported, not offered as cues.
+- **In-game verification** of the output and of DMM's handling of the Crimson Browser manifest.
+- **Smaller audio**: Wwise ADPCM (about 4x smaller than PCM) once its block layout for this engine is verified.
 - **Analyzer schema additions** that would help the Studio: a recorded game build/version (the
   installation check currently relies on file sizes/dates) and a populated `schema_meta` (generator and
   version). These are suggestions for the Analyzer project, not changes made here.

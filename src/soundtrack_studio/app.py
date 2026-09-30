@@ -5,6 +5,7 @@
     CrimsonSoundtrackStudio.exe --portability-check   verify nothing is written outside the app folder
     CrimsonSoundtrackStudio.exe --print-paths         show the portable directory layout
     CrimsonSoundtrackStudio.exe --print-state         settings/projects/models/caches/logs seen by this copy
+    CrimsonSoundtrackStudio.exe --ai-check MODEL.gguf start the bundled AI runtime with a model and test it
     CrimsonSoundtrackStudio.exe --smoke-gui           open the main window briefly and exit (CI)
 """
 
@@ -57,6 +58,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--portability-check", action="store_true", help="verify portable data storage")
     parser.add_argument("--print-paths", action="store_true")
     parser.add_argument("--print-state", action="store_true")
+    parser.add_argument("--ai-check", metavar="GGUF", help="load a GGUF model with the bundled runtime and test it")
     parser.add_argument("--smoke-gui", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
 
@@ -73,7 +75,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     from .logging_setup import setup_logging, shutdown_logging
 
     settings = Settings.load(paths)
-    cli = args.selftest or args.portability_check or args.print_paths or args.print_state
+    cli = args.selftest or args.portability_check or args.print_paths or args.print_state or args.ai_check
     setup_logging(paths, settings.log_level, console=cli and sys.stderr is not None)
     try:
         if args.print_paths:
@@ -91,6 +93,12 @@ def main(argv: Optional[List[str]] = None) -> int:
             result = run_selftest(paths, keep=args.keep)
             _print(json.dumps(result, indent=2, ensure_ascii=False))
             return 0 if result["ok"] else 1
+        if args.ai_check:
+            result = _ai_check(paths, settings, args.ai_check)
+            text = json.dumps(result, indent=2, ensure_ascii=False)
+            (paths.logs / "ai_check.json").write_text(text, encoding="utf-8")
+            _print(text)
+            return 0 if result["ok"] else 1
         if args.portability_check:
             from .portability import run_portability_check
 
@@ -102,6 +110,33 @@ def main(argv: Optional[List[str]] = None) -> int:
         return run_gui(paths, settings, smoke=args.smoke_gui)
     finally:
         shutdown_logging()
+
+
+def _ai_check(paths: AppPaths, settings, model_file: str) -> dict:
+    """Load a model with the bundled llama.cpp runtime and run one constrained request."""
+
+    from pathlib import Path
+
+    from .ai.catalog import ModelRegistry, register_custom_model
+    from .ai.runtime import LlamaServerBackend, find_llama_server, run_inference_check
+
+    server = find_llama_server(paths, settings.llama_server_path)
+    result = {"runtime": str(server) if server else None, "ok": False}
+    if server is None:
+        result["error"] = "llama.cpp runtime not found in runtime/llama"
+        return result
+    try:
+        model = register_custom_model(paths, ModelRegistry(paths), Path(model_file))
+        backend = LlamaServerBackend(paths, model, server_path=server, gpu_layers=settings.ai_gpu_layers)
+        try:
+            backend.start(timeout=300)
+            result.update(run_inference_check(backend))
+            result["args"] = backend.active_args
+        finally:
+            backend.stop()
+    except Exception as exc:  # noqa: BLE001 - reported in the JSON result
+        result["error"] = f"{getattr(exc, 'message', exc)} {getattr(exc, 'details', '')}".strip()
+    return result
 
 
 def _fatal(message: str) -> int:

@@ -8,15 +8,16 @@ registry, Documents, Desktop, Downloads or OneDrive, and no installer is needed.
 
 ```
 Crimson Soundtrack Studio/
-├── CrimsonSoundtrackStudio.exe      (+ _internal/ with the bundled runtime)
+├── CrimsonSoundtrackStudio.exe      (+ _internal/ with the bundled Python/Qt runtime)
+├── runtime/llama/                   bundled llama.cpp llama-server (read-only)
 ├── data/
-│   ├── config/settings.json         application settings (no registry, no QSettings)
-│   ├── cache/                       audio analysis cache, game-model cache, redirected library caches
+│   ├── config/                      settings.json, model_catalog.json, models.json (no registry, no QSettings)
+│   ├── cache/                       audio analysis, game-model and AI-response caches, redirected library caches
 │   └── databases/<hash>/            imported Analyzer database snapshots (read-only) + import.json
-├── models/{low,medium,high,custom}/ local AI models (Phase 3; downloaded from inside the app)
+├── models/{low,medium,high,custom}/ local AI models (downloaded from inside the app, SHA-256 verified)
 ├── projects/<name>/project.sqlite3  one folder per project
-├── output/                          built mods (later phases)
-├── logs/                            studio.log, crash.log, selftest.json, portability.json, state.json
+├── output/                          built mods (<name>/ and <name>.zip; the previous build is kept as <name>.previous)
+├── logs/                            studio.log, crash.log, llama-server.log, selftest.json, portability.json, state.json
 └── temp/                            temporary files; entries older than 24 h are removed at startup
 ```
 
@@ -35,6 +36,9 @@ Crimson Soundtrack Studio/
   folders in the registry (ComDlg32 MRU). `use_native_dialogs` in `settings.json` switches to it if wanted.
 - The Analyzer database is snapshotted into `data/databases/`, so SQLite never creates side files next to
   the user's original.
+- The llama.cpp child process gets `LLAMA_CACHE` inside `data/cache/` and inherits the redirected temp folders.
+- Custom GGUF models the user adds from elsewhere are referenced, not copied; they are external inputs like
+  the music folder.
 
 ## Verification
 
