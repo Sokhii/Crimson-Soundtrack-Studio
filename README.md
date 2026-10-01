@@ -14,7 +14,7 @@ Crimson Desert ──► Crimson Desert Analyzer ──► Analyzer SQLite DB �
                                                       your music library   local AI (llama.cpp)
 ```
 
-> **Status: 0.13 (feature-complete beta).** The whole workflow works end to end: project → game → Analyzer
+> **Status: 0.13.1 (feature-complete beta).** The whole workflow works end to end: project → game → Analyzer
 > database → music library → local AI (optional) → thematic matching → review → build → validated mod
 > package. **It has not yet been verified in the game itself** (the development environment has no game
 > install). Please report results, including which package layout your mod manager imports (see

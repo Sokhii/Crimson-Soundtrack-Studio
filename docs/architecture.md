@@ -206,4 +206,8 @@ prefetch-streamed source gets the first part of its new `.wem` (header, seek tab
 plain byte prefix, as in the working mods) with the size field updated, and a plain streamed source needs no bank
 change. Validation checks the Vorbis header (sample count within one block of the segment), that every prefetch
 copy is the beginning of the written file and that in-memory sizes match. Wwise is located through the chosen path,
-`%WWISEROOT%`, `Program Files\Audiokinetic\Wwise*` or `PATH`; its conversion project lives in `data/wwise/`.
+`%WWISEROOT%`, `Program Files\Audiokinetic\Wwise*` or `PATH`; its conversion project lives in `data/wwise/`. A project made by `create-new-project` has only a PCM "Default
+Conversion Settings" and none of the factory presets, so the Studio patches the project's
+`Conversion Settings/Default Work Unit.wwu` itself (both the default and its own "CSS Vorbis" entry: Vorbis, Wwise
+defaults for quality/channels/sample rate; format taken from a project saved by Wwise 2023.1.19) and asks for "CSS
+Vorbis". Every path given to WwiseConsole is in 8.3 short form (its tools fail near 260 characters).

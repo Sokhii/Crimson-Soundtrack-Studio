@@ -995,7 +995,7 @@ class Studio:
         from .compiler.wwise import WwiseEncoder
 
         console = self.wwise_console()
-        return WwiseEncoder(self.paths, console, self.settings.wwise_conversion) if console else None
+        return WwiseEncoder(self.paths, console) if console else None
 
     def test_wwise(self) -> Dict[str, Any]:
         import uuid

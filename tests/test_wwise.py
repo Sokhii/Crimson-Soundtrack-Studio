@@ -276,3 +276,77 @@ def test_short_path_shortens_deep_folders_on_windows(tmp_path):
     short = short_path(deep / "not yet created" / "file.wproj")
     assert short.endswith("not yet created\\file.wproj") and len(short) <= len(str(deep / "not yet created" / "file.wproj"))
     assert short_path(deep) and __import__("pathlib").Path(short_path(deep)).is_dir()
+
+
+# ----------------------------------------- the conversion project is set to Vorbis by the Studio
+PCM_WORK_UNIT = """<?xml version="1.0" encoding="utf-8"?>
+<WwiseDocument Type="WorkUnit" ID="{289DFBFC-2CF4-4F01-972E-9BA48FE725AE}" SchemaVersion="119">
+\t<Conversions>
+\t\t<WorkUnit Name="Default Work Unit" ID="{289DFBFC-2CF4-4F01-972E-9BA48FE725AE}" PersistMode="Standalone">
+\t\t\t<ChildrenList>
+\t\t\t\t<Conversion Name="Default Conversion Settings" ID="{6D1B890C-9826-4384-BF07-C15223E9FB56}">
+\t\t\t\t\t<PropertyList>
+\t\t\t\t\t\t<Property Name="SampleRate" Type="int32">
+\t\t\t\t\t\t\t<ValueList>
+\t\t\t\t\t\t\t\t<Value Platform="Windows">0</Value>
+\t\t\t\t\t\t\t</ValueList>
+\t\t\t\t\t\t</Property>
+\t\t\t\t\t</PropertyList>
+\t\t\t\t\t<ConversionPluginInfoList>
+\t\t\t\t\t\t<ConversionPluginInfo Platform="Windows">
+\t\t\t\t\t\t\t<ConversionPlugin Name="" ID="{11111111-2222-3333-4444-555555555555}" PluginName="PCM" CompanyID="0" PluginID="1"/>
+\t\t\t\t\t\t</ConversionPluginInfo>
+\t\t\t\t\t</ConversionPluginInfoList>
+\t\t\t\t</Conversion>
+\t\t\t</ChildrenList>
+\t\t</WorkUnit>
+\t</Conversions>
+</WwiseDocument>
+"""
+
+
+def _conversions(xml: str):
+    import xml.etree.ElementTree as ET
+
+    root = ET.fromstring(xml.split("?>", 1)[1])
+    return {c.get("Name"): c.find("./ConversionPluginInfoList/ConversionPluginInfo[@Platform='Windows']/ConversionPlugin")
+            for c in root.iter("Conversion")}
+
+
+def test_work_unit_is_patched_to_vorbis_with_our_conversion():
+    from soundtrack_studio.compiler.wwise import CONVERSION_NAME, vorbis_conversion_work_unit
+
+    out = vorbis_conversion_work_unit(PCM_WORK_UNIT)
+    conversions = _conversions(out)
+    assert set(conversions) == {"Default Conversion Settings", CONVERSION_NAME}
+    for plugin in conversions.values():
+        assert (plugin.get("PluginName"), plugin.get("CompanyID"), plugin.get("PluginID")) == ("Vorbis", "0", "4")
+    assert 'ID="{6D1B890C-9826-4384-BF07-C15223E9FB56}"' in out       # the project's own ids stay valid
+    assert out.count('ID="{11111111-2222-3333-4444-555555555555}"') == 1  # ours gets a different plug-in id
+    assert vorbis_conversion_work_unit(out) == out                      # idempotent
+
+
+def test_unexpected_work_unit_falls_back_to_what_wwise_wrote():
+    from soundtrack_studio.compiler.wwise import CONVERSION_NAME, vorbis_conversion_work_unit
+
+    for broken in ("", "<WwiseDocument/>", "garbage"):
+        out = vorbis_conversion_work_unit(broken)
+        conversions = _conversions(out)
+        assert set(conversions) == {"Default Conversion Settings", CONVERSION_NAME}
+        assert all(p.get("PluginName") == "Vorbis" for p in conversions.values())
+
+
+def test_encoder_sets_up_the_project_and_requests_our_conversion(paths, tmp_path):
+    from soundtrack_studio.compiler.wwise import CONVERSION_NAME
+
+    enc = WwiseEncoder(paths, install_fake_wwise(tmp_path / "wwise"))
+    wav_dir = tmp_path / "wav"
+    wav_dir.mkdir()
+    wem.write_wav(wav_dir / "1.wav", np.zeros((4800, 2), np.float32), 48000)
+    (enc.project.parent / "Conversion Settings").mkdir(parents=True)
+    (enc.project.parent / "Conversion Settings" / "Default Work Unit.wwu").write_text(PCM_WORK_UNIT, encoding="utf-8")
+    enc.project.write_text("<WwiseDocument/>", encoding="utf-8")            # a project created earlier, still PCM
+    enc.convert([wav_dir / "1.wav"], tmp_path / "work")
+    unit = (enc.project.parent / "Conversion Settings" / "Default Work Unit.wwu").read_text(encoding="utf-8")
+    assert all(p.get("PluginName") == "Vorbis" for p in _conversions(unit).values())
+    assert enc.conversion == CONVERSION_NAME
