@@ -143,3 +143,19 @@ def test_clean_temp_removes_only_old_entries(tmp_path):
     os.utime(old, (past, past))
     assert p.clean_temp() == 1
     assert not old.exists() and fresh.exists()
+
+
+def test_is_file_goes_through_the_long_path_prefix(tmp_path, monkeypatch):
+    from soundtrack_studio import app_paths
+
+    real = tmp_path / "song.flac"
+    real.write_bytes(b"x")
+    seen = []
+    monkeypatch.setattr(app_paths, "os_path", lambda p, **kw: seen.append(str(p)) or str(p))
+    assert app_paths.is_file(real) and seen == [str(real)]          # the user's file is opened via os_path()
+    assert not app_paths.is_file(tmp_path / "missing.flac")
+    # the track in the bug report: 272 characters, which Windows only opens with the \\?\ prefix
+    name = ("C:\\Users\\Matthew\\Desktop\\Crimson Desert Music Modding\\Music for Crimson Desert Modding\\Game of Thrones "
+            "Music\\Ramin Djawadi\\Game Of Thrones Season 2 (Music From The HBO Series)\\Don't Die With A Clean Sword - "
+            "From The Game Of Thrones Season 2 Soundtrack - Ramin Djawadi.flac")
+    assert len(name) > 260 and os_path(name, windows=True).startswith("\\\\?\\C:\\Users\\Matthew")

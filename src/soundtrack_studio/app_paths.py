@@ -204,6 +204,15 @@ def os_path(path: Path | str, *, windows: Optional[bool] = None, force: bool = F
     return "\\\\?\\" + text
 
 
+def is_file(path: Path | str) -> bool:
+    """``Path.is_file()`` for user files: also true for paths beyond Windows' 260-character limit."""
+
+    try:
+        return Path(os_path(path)).is_file()
+    except OSError:
+        return False
+
+
 _current: Optional[AppPaths] = None
 
 

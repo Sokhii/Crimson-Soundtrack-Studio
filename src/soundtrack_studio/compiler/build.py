@@ -27,7 +27,7 @@ from typing import Any, Callable, Dict, List, Optional
 import numpy as np
 
 from .. import __version__
-from ..app_paths import AppPaths
+from ..app_paths import AppPaths, is_file
 from ..errors import OperationCancelled
 from ..game_model.model import GameMusicModel
 from ..matching.store import MappingEntry
@@ -102,7 +102,7 @@ class ModBuilder:
                                hint="Accept or choose tracks on the Matching page first.")
         for entry in mapping:
             path = self.track_paths.get(entry.track_id)
-            if path is None or not path.is_file():
+            if path is None or not is_file(path):
                 raise CompileError("A chosen music file is missing.", hint="Rescan the music library or choose "
                                    "another track.", details=str(path or entry.track_id))
 
