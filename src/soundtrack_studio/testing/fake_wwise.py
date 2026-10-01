@@ -29,6 +29,9 @@ tree = ET.parse(source).getroot()
 root = tree.get("Root")
 os.makedirs(os.path.join(output, "Windows"), exist_ok=True)
 for item in tree.findall("Source"):
+    if os.environ.get("FAKE_WWISE_MISSING"):
+        print("Conversion\tWarning\tAudioConversion_FileOpenError\tCan't open source or output file", file=sys.stderr)
+        sys.exit(2)
     if os.environ.get("FAKE_WWISE_FAIL"):
         print("Error: conversion failed", file=sys.stderr)
         sys.exit(1)
@@ -53,6 +56,9 @@ for item in tree.findall("Source"):
     name = os.path.splitext(item.get("Path"))[0] + ".wem"
     open(os.path.join(output, "Windows", name), "wb").write(b"RIFF" + struct.pack("<I", len(body)) + body)
 print("converted")
+if os.environ.get("FAKE_WWISE_WARN"):
+    print("Process completed with warning(s).")
+    sys.exit(2)
 '''
 
 

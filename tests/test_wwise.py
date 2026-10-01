@@ -236,3 +236,43 @@ def test_find_console_in_launcher_default_and_other_drives(tmp_path, monkeypatch
     monkeypatch.setattr(wwise, "search_roots", lambda: [tmp_path / "E" / "Audiokinetic"])
     assert wwise.find_console() == win32
     assert any("Audiokinetic" in p for p in wwise.searched_places())
+
+
+def test_warnings_exit_code_is_not_an_error_but_missing_output_is(paths, tmp_path, monkeypatch):
+    """WwiseConsole exits with 2 when it finished with warnings; the log in the bug report was exit 2 with no output."""
+
+    enc = WwiseEncoder(paths, install_fake_wwise(tmp_path / "wwise"))
+    wav_dir = tmp_path / "wav"
+    wav_dir.mkdir()
+    wem.write_wav(wav_dir / "1.wav", np.zeros((4800, 2), np.float32), 48000)
+    monkeypatch.setenv("FAKE_WWISE_WARN", "1")
+    assert set(enc.convert([wav_dir / "1.wav"], tmp_path / "work")) == {"1"}          # warnings, but a result
+    monkeypatch.delenv("FAKE_WWISE_WARN")
+    monkeypatch.setenv("FAKE_WWISE_MISSING", "1")
+    with pytest.raises(WwiseError, match="did not produce") as err:
+        enc.convert([wav_dir / "1.wav"], tmp_path / "work")
+    assert "Can't open source or output file" in err.value.details              # the reason is shown, not hidden
+
+
+def test_too_deep_folder_gets_a_clear_message(paths, tmp_path, monkeypatch):
+    from soundtrack_studio.compiler import wwise
+
+    enc = WwiseEncoder(paths, install_fake_wwise(tmp_path / "wwise"))
+    wav_dir = tmp_path / "wav"
+    wav_dir.mkdir()
+    wem.write_wav(wav_dir / "1.wav", np.zeros((4800, 2), np.float32), 48000)
+    monkeypatch.setattr(wwise, "MAX_SAFE_PATH", 40)
+    with pytest.raises(WwiseError, match="too deep") as err:
+        enc.convert([wav_dir / "1.wav"], tmp_path / "work")
+    assert "shorter location" in err.value.hint
+
+
+@pytest.mark.skipif(__import__("os").name != "nt", reason="8.3 short names are a Windows feature")
+def test_short_path_shortens_deep_folders_on_windows(tmp_path):
+    from soundtrack_studio.compiler.wwise import short_path
+
+    deep = tmp_path / ("a long folder name number one" * 1) / ("a long folder name number two") / "data"
+    deep.mkdir(parents=True)
+    short = short_path(deep / "not yet created" / "file.wproj")
+    assert short.endswith("not yet created\\file.wproj") and len(short) <= len(str(deep / "not yet created" / "file.wproj"))
+    assert short_path(deep) and __import__("pathlib").Path(short_path(deep)).is_dir()

@@ -130,6 +130,32 @@ def _plain(path: Path) -> str:
     return text[4:] if text.startswith("\\\\?\\") else text
 
 
+MAX_SAFE_PATH = 230                     # Wwise's own tools stop working near Windows' 260-character limit
+
+
+def short_path(path: Path) -> str:
+    """The path with every existing folder in its short 8.3 form (Windows), else as given.
+
+    Wwise's tools use the classic path APIs and fail near 260 characters ("Can't open source or output file" for a
+    converted file); the Studio's folder can already be 200 characters deep, and Wwise adds its own cache folders
+    below the project. The short form of an existing folder is a few characters per level."""
+
+    text = _plain(path)
+    if os.name != "nt":
+        return text
+    import ctypes
+
+    probe = Path(text)
+    tail: List[str] = []
+    while not probe.exists() and probe.parent != probe:       # shorten the part that exists, keep the rest as it is
+        tail.insert(0, probe.name)
+        probe = probe.parent
+    buf = ctypes.create_unicode_buffer(1024)
+    n = ctypes.windll.kernel32.GetShortPathNameW(str(probe), buf, 1024)
+    base = buf.value if 0 < n < 1024 else str(probe)
+    return str(Path(base).joinpath(*tail)) if tail else base
+
+
 class WwiseEncoder:
     def __init__(self, paths: AppPaths, console: Path, conversion: str = DEFAULT_CONVERSION,
                  timeout_per_file: float = 120.0) -> None:
@@ -161,7 +187,7 @@ class WwiseEncoder:
         with open(self.log_file, "a", encoding="utf-8") as handle:
             handle.write(f"\n==== {time.strftime('%Y-%m-%d %H:%M:%S')} {' '.join(args[:2])} "
                          f"(exit {result.returncode}, {time.monotonic() - started:.1f}s)\n{output[-20000:]}\n")
-        if result.returncode != 0:
+        if result.returncode not in (0, 2):                       # 2 = finished with warnings
             raise WwiseError("Wwise reported an error.", hint="Details are in logs\\wwise_console.log.",
                              details=output.strip()[-1500:])
         return output
@@ -170,7 +196,7 @@ class WwiseEncoder:
         if not self.project.is_file():
             self.home.mkdir(parents=True, exist_ok=True)
             shutil.rmtree(self.project.parent, ignore_errors=True)
-            self._run(["create-new-project", _plain(self.project)], timeout=600)
+            self._run(["create-new-project", short_path(self.project)], timeout=600)
             if not self.project.is_file():
                 raise WwiseError("Wwise did not create its conversion project.", details=str(self.project))
         return self.project
@@ -182,6 +208,12 @@ class WwiseEncoder:
         if not wavs:
             return {}
         self.ensure_project()
+        longest = max(len(short_path(wavs[0])), len(short_path(work)) + len("/wem/Windows/") + len(wavs[0].name),
+                      len(short_path(self.project)) + len("/.cache/Windows/SFX/") + len(wavs[0].name) + 40)
+        if longest > MAX_SAFE_PATH:
+            raise WwiseError("The Studio's folder is too deep for Wwise (Windows' 260-character path limit).",
+                             hint="Move the whole Studio folder to a shorter location such as C:\\CSS and try again.",
+                             details=f"{longest} characters even in short form: {short_path(work)}")
         root = wavs[0].parent
         if any(w.parent != root for w in wavs):
             raise ValueError("all files of one conversion must be in the same folder")
@@ -190,19 +222,19 @@ class WwiseEncoder:
         out.mkdir(parents=True)
         listing = work / "list.wsources"
         lines = ['<?xml version="1.0" encoding="UTF-8"?>',
-                 f"<ExternalSourcesList SchemaVersion=\"1\" Root={quoteattr(_plain(root))}>"]
+                 f"<ExternalSourcesList SchemaVersion=\"1\" Root={quoteattr(short_path(root))}>"]
         lines += [f"  <Source Path={quoteattr(w.name)} Conversion={quoteattr(self.conversion)}/>" for w in wavs]
         lines.append("</ExternalSourcesList>")
         listing.write_text("\n".join(lines) + "\n", encoding="utf-8")
-        self._run(["convert-external-source", _plain(self.project), "--source-file", _plain(listing),
-                   "--output", _plain(out)], timeout=300 + self.timeout_per_file * len(wavs))
+        output = self._run(["convert-external-source", short_path(self.project), "--source-file", short_path(listing),
+                            "--output", short_path(out)], timeout=300 + self.timeout_per_file * len(wavs))
         produced = {p.stem: p for p in out.rglob("*.wem")}     # Wwise writes into <output>\Windows\
         results: Dict[str, bytes] = {}
         for w in wavs:
             path = produced.get(w.stem)
             if path is None:
                 raise WwiseError("Wwise did not produce a converted file.", hint="See logs\\wwise_console.log.",
-                                 details=w.name)
+                                 details=f"{w.name}\n{output.strip()[-1200:]}")
             data = path.read_bytes()
             info = wem.read_wem_info(data)
             if not info.is_vorbis:
