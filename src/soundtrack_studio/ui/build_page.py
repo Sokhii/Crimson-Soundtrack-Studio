@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog
 
 from ..app_paths import is_file, os_path
 from ..compiler.build import BuildSettings
-from ..compiler.validate import REPORT_NAME
+from ..compiler.validate import OLD_REPORT_NAMES, report_file_name
 from .widgets import Card, esc, fmt_bytes
 
 ENCODER_LABELS = {"wwise_vorbis": "Wwise Vorbis — same as the working Nexus music mods (needs Wwise)",
@@ -272,7 +272,7 @@ class BuildPage(QWidget):
         row = self.history.currentRow()
         build = self.builds[row] if 0 <= row < len(self.builds) else (self.builds[0] if self.builds else None)
         if build and build["output_dir"] and Path(os_path(build["output_dir"])).is_dir():
-            report = Path(build["output_dir"]) / REPORT_NAME
-            if not is_file(report):                       # mods built before the report was renamed
-                report = Path(build["output_dir"]) / "build_report.json"
-            QDesktopServices.openUrl(QUrl.fromLocalFile(str(report if is_file(report) else build["output_dir"])))
+            folder = Path(build["output_dir"])
+            candidates = [folder.parent / report_file_name(folder.name)] + [folder / n for n in OLD_REPORT_NAMES]
+            report = next((c for c in candidates if is_file(c)), None)
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(report or build["output_dir"])))

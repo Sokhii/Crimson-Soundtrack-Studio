@@ -189,7 +189,7 @@ def test_vorbis_build_end_to_end(vorbis_built):
     assert src[433831842][0].stream_type == 2 and src[558103][0].stream_type == 0
     embedded = bnk.media_data(bnk.parse_chunks(bank), 558103)
     assert wem.read_wem_info(embedded).is_vorbis and src[558103][0].in_memory_size == len(embedded)
-    report = json.loads((result.output_dir / "css_build_report.json").read_text())
+    report = json.loads((result.report_path).read_text())
     assert report["codec"] == "vorbis" and report["sources"]["433831842"]["codec"] == "vorbis"
     assert (fingerprint(game), fingerprint(music)) == before
     assert not list(studio.paths.temp.glob("build-*"))          # no WAVs or Wwise output left behind

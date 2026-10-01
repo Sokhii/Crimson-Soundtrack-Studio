@@ -15,9 +15,14 @@ from typing import Any, Dict, List
 from . import bnk, wem
 from .archive import CompileError
 
-# The Studio's own report. Not named build_report.json: DMM reads a file of that name in every mod folder as its
-# own format and logs a parse error for ours ('expected u32' at the "format" field).
-REPORT_NAME = "css_build_report.json"
+# The Studio's own report is not part of the mod: it is written next to the mod folder as
+# ``<mod name>.build-report.json`` (mod managers read the JSON files they find inside a mod folder, and DMM logged
+# parse errors for ours). Reports of mods built before 0.13.1 are inside the folder under these names.
+OLD_REPORT_NAMES = ("css_build_report.json", "build_report.json")
+
+
+def report_file_name(mod_name: str) -> str:
+    return f"{mod_name}.build-report.json"
 
 
 @dataclass
@@ -34,7 +39,7 @@ class ValidationResult:
 
 
 def validate_output(mod_dir: Path, expected: Dict[str, Any]) -> ValidationResult:
-    """``expected`` comes from css_build_report.json: files, sources (id -> stream/frames/channels/banks)."""
+    """``expected`` is the build report: files, sources (id -> stream/frames/channels/banks)."""
 
     result = ValidationResult()
     files_dir = mod_dir / expected.get("files_dir", "files")
@@ -46,7 +51,7 @@ def validate_output(mod_dir: Path, expected: Dict[str, Any]) -> ValidationResult
                 result.error("manifest.json does not describe a crimson_browser_mod_v1 package")
         except (OSError, ValueError) as exc:
             result.error(f"manifest.json unreadable: {exc}")
-    metadata = {"manifest.json", REPORT_NAME, "build_report.json", "README.txt"}  # package-level files, not game files
+    metadata = {"manifest.json", "README.txt", *OLD_REPORT_NAMES}  # package-level files, not game files
     written = ({p.relative_to(files_dir).as_posix() for p in files_dir.rglob("*") if p.is_file()} - metadata
                if files_dir.is_dir() else set())
     listed = set(expected.get("files", []))

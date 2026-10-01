@@ -36,7 +36,7 @@ from . import bnk, wem
 from .archive import CompileError, GameFileReader
 from .audio import TARGET_RATE, FitSettings, map_channels, render_timeline, slice_timeline
 from .plan import build_plan, timeline_slice_frames
-from .validate import REPORT_NAME, ValidationResult, validate_output
+from .validate import ValidationResult, report_file_name, validate_output
 
 log = logging.getLogger(__name__)
 
@@ -67,6 +67,7 @@ class BuildResult:
     report: Dict[str, Any]
     validation: ValidationResult
     warnings: List[str] = field(default_factory=list)
+    report_path: Optional[Path] = None
 
 
 def safe_name(name: str) -> str:
@@ -226,7 +227,6 @@ class ModBuilder:
                     "name": mod_name, "version": self.settings.version, "author": self.settings.author,
                     "description": self.settings.description or "Music replacement built with Crimson Soundtrack Studio.",
                     "files_dir": "files"}, indent=2, ensure_ascii=False), encoding="utf-8")
-            (mod_dir / REPORT_NAME).write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
             (mod_dir / "README.txt").write_text(_readme(mod_name, report, self.settings), encoding="utf-8")
 
             # 4. validate what was written, then publish
@@ -237,8 +237,10 @@ class ModBuilder:
                 validation.error("The game files changed during the build (they must never be modified).")
             report["validation"] = asdict(validation)
             report["elapsed_s"] = round(time.monotonic() - started, 1)
-            (mod_dir / REPORT_NAME).write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
+            report_text = json.dumps(report, indent=2, ensure_ascii=False)
             if not validation.ok:
+                self.paths.logs.mkdir(parents=True, exist_ok=True)
+                (self.paths.logs / "failed_build_report.json").write_text(report_text, encoding="utf-8")
                 raise CompileError("The built mod failed validation and was not saved.",
                                    details="\n".join(validation.errors[:20]))
             self.paths.output.mkdir(parents=True, exist_ok=True)
@@ -249,6 +251,10 @@ class ModBuilder:
                 shutil.rmtree(backup, ignore_errors=True)
                 final.replace(backup)
             shutil.move(str(mod_dir), str(final))
+            # The report is the Studio's own record. It is kept next to the mod, not in it: mod managers read the
+            # JSON files they find in a mod folder (DMM logged parse errors for ours), and the game does not need it.
+            report_path = self.paths.output / report_file_name(mod_name)
+            report_path.write_text(report_text, encoding="utf-8")
             zip_path = None
             if self.settings.make_zip:
                 report_progress("Creating the ZIP file", 0, 0)
@@ -257,7 +263,7 @@ class ModBuilder:
                     for path in sorted(final.rglob("*")):
                         if path.is_file():
                             zf.write(path, f"{mod_name}/{path.relative_to(final).as_posix()}")
-            return BuildResult(shown, zip_path, report, validation, plan.warnings)
+            return BuildResult(shown, zip_path, report, validation, plan.warnings, report_path)
         finally:
             shutil.rmtree(work, ignore_errors=True)
 

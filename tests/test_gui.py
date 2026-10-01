@@ -207,7 +207,7 @@ def test_build_page_builds_a_mod(app, window, tmp_path, monkeypatch):
     assert not window.errors, window.errors
     assert messages and messages[0][0] == "Mod built"
     assert (studio.paths.output / "GUI Mod" / "manifest.json").is_file()
-    report = json.loads((studio.paths.output / "GUI Mod" / "css_build_report.json").read_text())
+    report = json.loads((studio.paths.output / "GUI Mod.build-report.json").read_text())
     assert report["codec"] == "vorbis"
     assert page.history.rowCount() == 1 and page.history.item(0, 1).text() == "completed"
 
