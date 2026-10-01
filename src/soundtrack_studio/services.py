@@ -964,6 +964,8 @@ class Studio:
         for key, value in saved.items():
             if hasattr(settings, key):
                 setattr(settings, key, value)
+        if "loudness_mode" not in saved and saved.get("normalize") is False:
+            settings.loudness_mode = "off"            # a project saved before 0.14 with levelling switched off
         settings.encoder = self.settings.build_encoder if self.settings.build_encoder in ("wwise_vorbis", "pcm") \
             else "wwise_vorbis"                       # an app-wide choice, not per project
         return settings
@@ -1010,6 +1012,21 @@ class Studio:
         (self.paths.logs / "wwise_check.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
         return result
 
+    def loudness_references(self, model, mapping) -> Dict[str, Dict[str, Any]]:
+        """Measured loudness of the original music of every cue being replaced (from 'Analyse game audio')."""
+
+        results = self.game_audio_results()
+        if not results:
+            return {}
+        cues = {str(c.segment_id): c for c in model.cues}
+        out: Dict[str, Dict[str, Any]] = {}
+        for entry in mapping:
+            cue = cues.get(str(entry.cue_key))
+            features = self.cue_audio(cue, results)[0] if cue is not None else None
+            if features:
+                out[str(entry.cue_key)] = {"lufs": features.get("loudness_lufs"), "rms": features.get("rms_dbfs")}
+        return out
+
     def save_build_settings(self, settings: BuildSettings) -> None:
         from dataclasses import asdict
 
@@ -1043,8 +1060,9 @@ class Studio:
         conn = open_snapshot(snapshot)
         try:
             wwise = self.wwise_encoder() if settings.encoder == "wwise_vorbis" else None
+            references = self.loudness_references(model, mapping) if settings.loudness_mode == "match" else {}
             builder = ModBuilder(self.paths, Path(game_path), conn, ref["installation_id"], model, tracks, settings,
-                                 wwise=wwise)
+                                 wwise=wwise, references=references)
             result = builder.build(mapping, progress, cancel)
         except OperationCancelled:
             project.execute("UPDATE build SET status='cancelled', finished_at=? WHERE id=?", (now_iso(), build_id))

@@ -193,12 +193,22 @@ user accepts or chooses form the build mapping.
 ## Compiler
 
 `plan` (primary track gets the music, other layers silence; all banks holding a source, including twins) →
-`audio` (decode, polyphase resample to 48 kHz, channel mapping, trim/loop/pad with fades, loudness
-normalisation, timeline slicing per clip) → `wem` (Wwise PCM, or a `.wav` per source that `wwise` converts to
+`audio` (decode, polyphase resample to 48 kHz, channel mapping, trim/loop/pad with fades, timeline slicing per
+clip) → `loudness` (one gain per cue, see below) → `wem` (Wwise PCM, or a `.wav` per source that `wwise` converts to
 Wwise Vorbis through the user's `WwiseConsole.exe`, 24 sources per run) → `archive` (read original banks through the
 Analyzer's entry records, verify SHA-1) → `bnk` (patch source fields in place, rebuild `DIDX`/`DATA`) →
 `build` (workspace in `temp/`, manifest/README/report) → `validate` (independent re-read of everything) →
 `output/<mod name>/`. Any disagreement between the game files and the Analyzer data aborts the build.
+
+**Loudness (0.14).** `loudness.py` measures integrated loudness per ITU-R BS.1770 (K-weighting by FFT convolution
+with the filters' impulse response, 400 ms gated blocks; within 0.05 LU of a reference implementation on test
+signals) and true peak (4x interpolation around the loudest samples). Each cue gets one gain, never a limiter: in
+*match* mode (default) towards the loudness of the original game music it replaces, measured during "Analyse game
+audio" (`loudness_lufs` in the game-audio measurements; measurements made before 0.14 only have an RMS level, from
+which the target is estimated); in *fixed* mode towards the Build page's target (also the fallback for cues whose
+original was not measured); in *off* mode the track keeps its level. The gain is capped so the true peak stays at or
+below -1 dBTP (room for the Vorbis encoder's small overshoot); a cue that cannot reach its target stays quieter, and
+the report records target, gain and shortfall per cue plus a summary. In-bank volumes are not changed.
 
 **Vorbis builds (default).** Matching the community mods that are known to play, the soundbanks keep the game's
 Vorbis codec, storage type and flags; only media changes: an in-bank source gets the new `.wem` in `DATA`, a

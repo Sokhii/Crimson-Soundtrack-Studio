@@ -174,8 +174,6 @@ def test_resample_quality():
 
 def test_normalize_and_channels():
     x = (np.sin(np.linspace(0, 400, 48000)) * 0.9)[:, None].astype(np.float32)
-    y, gain = audio.normalize(x, -18.0, -1.0)
-    assert abs(20 * np.log10(np.sqrt(np.mean(y ** 2))) + 18) < 0.5 and gain < 0
     assert audio.map_channels(x, 2).shape == (48000, 2)
     assert audio.map_channels(np.ones((5, 2), np.float32), 1).shape == (5, 1)
     assert audio.map_channels(np.ones((5, 2), np.float32), 4).shape == (5, 4)

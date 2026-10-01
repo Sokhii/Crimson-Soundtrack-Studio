@@ -1,4 +1,4 @@
-"""Replacement audio rendering: decode, resample, map channels, fit to a timeline, normalise.
+"""Replacement audio rendering: decode, resample, map channels, fit to a timeline (loudness: ``loudness.py``).
 
 The user's file is only read. Everything is produced in memory and written
 into the build workspace.
@@ -26,9 +26,6 @@ CROSSFADE_S = 2.0
 class FitSettings:
     fit_mode: str = "auto"          # auto | trim | loop | pad
     start_offset_s: float = 0.0
-    normalize: bool = True
-    target_rms_dbfs: float = -18.0
-    peak_limit_dbfs: float = -1.0
 
 
 def read_audio(path: Path, start_s: float = 0.0, max_s: float = 0.0) -> Tuple[np.ndarray, int]:
@@ -146,21 +143,6 @@ def fit_to_length(x: np.ndarray, frames: int, mode: str, rate: int = TARGET_RATE
     return out, how
 
 
-def normalize(x: np.ndarray, target_rms_dbfs: float, peak_limit_dbfs: float) -> Tuple[np.ndarray, float]:
-    rms = float(np.sqrt(np.mean(x.astype(np.float64) ** 2))) if x.size else 0.0
-    if rms < 1e-6:
-        return x, 0.0
-    gain = 10 ** (target_rms_dbfs / 20) / rms
-    y = x * gain
-    limit = 10 ** (peak_limit_dbfs / 20)
-    peak = float(np.max(np.abs(y)))
-    if peak > limit:
-        # soft knee: tanh saturation above the limit keeps loud passages from clipping
-        y = np.where(np.abs(y) > limit * 0.8,
-                     np.sign(y) * (limit * 0.8 + (limit * 0.2) * np.tanh((np.abs(y) - limit * 0.8) / (limit * 0.2))), y)
-    return y.astype(np.float32), round(20 * math.log10(gain), 2)
-
-
 def slice_timeline(timeline: np.ndarray, start: int, frames: int) -> np.ndarray:
     """``frames`` frames of the segment timeline beginning at frame ``start``.
 
@@ -182,7 +164,4 @@ def render_timeline(path: Path, duration_s: float, channels: int, fit: FitSettin
     data, rate = read_audio(path, fit.start_offset_s, duration_s + 5.0)
     data = map_channels(resample(data, rate, TARGET_RATE), channels)
     out, how = fit_to_length(data, frames, fit.fit_mode)
-    gain = 0.0
-    if fit.normalize:
-        out, gain = normalize(out, fit.target_rms_dbfs, fit.peak_limit_dbfs)
-    return out, {"fit": how, "gain_db": gain, "source_rate": rate, "frames": frames}
+    return out, {"fit": how, "source_rate": rate, "frames": frames}

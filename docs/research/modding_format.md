@@ -128,5 +128,7 @@ reimplemented. Not yet done: matching WTV's in-bank volume changes.
   test must be done by a user, and the Studio records everything needed for a bug report in
   `build_report.json`.
 - Whether DMM imports the Crimson Browser manifest (see section 1). Both export layouts are available.
-- Loudness of the original music (Vorbis is not decoded), so replacements are normalised to a common
-  level (default −18 dBFS RMS, peaks limited to −1 dBFS) rather than matched to the originals.
+- Loudness: since 0.14 the original music is decoded (vgmstream) and measured, and each replacement is matched to
+  its original's integrated loudness (LUFS) within a -1 dBTP true-peak ceiling. The game's in-bank volume offsets
+  apply to originals and replacements alike, so matching the files keeps the in-game balance; in-bank volumes are
+  not changed (Way To Valhalla raises them; not needed when the files already match).

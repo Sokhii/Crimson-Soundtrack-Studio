@@ -291,7 +291,16 @@ class GameAudioAnalyzer:
             blocks = f.blocks(blocksize=rate * BLOCK_SECONDS // HOP * HOP, overlap=FRAME - HOP, dtype="float32",
                               always_2d=True)
             features = analyze_blocks(blocks, rate, cancel=cancel)
-        return features.to_dict()
+        out = features.to_dict()
+        try:                                     # perceived loudness (LUFS), used to match replacements to it
+            from ..compiler.loudness import lufs_of_blocks
+
+            with sf.SoundFile(os_path(wav), mode="r") as f:
+                out["loudness_lufs"] = lufs_of_blocks(f.blocks(blocksize=f.samplerate * 10, dtype="float32",
+                                                               always_2d=True), f.samplerate)
+        except (RuntimeError, OSError, ValueError):
+            out["loudness_lufs"] = None
+        return out
 
     # ------------------------------------------------------------ decode check
     def decode_check(self, source_ids: List[int], count: int = 6) -> Dict[str, Any]:

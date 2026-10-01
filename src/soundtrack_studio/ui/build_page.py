@@ -27,8 +27,22 @@ WWISE_STEPS = ("Wwise is made by Audiokinetic and is free for non-commercial use
                "4. Come back here and press 'Find Wwise', then 'Test Wwise'.\n\n"
                "Wwise installs into Program Files and keeps its own settings in your user profile; the Studio only "
                "runs it and keeps all converted files in its own folder.")
+LOUDNESS_LABELS = {"match": "Match the original music (automatic)",
+                   "fixed": "Fixed loudness (manual)",
+                   "off": "Keep each track's own level"}
 LAYOUT_LABELS = {"crimson_browser": "Mod manager package (manifest.json + files/) — DMM / CDUMM",
                  "package_folders": "Package folders only (0004/…) — alternative layout"}
+
+
+def loudness_text(summary) -> str:
+    if not summary or not summary.get("cues") or summary.get("mode") == "off":
+        return ""
+    text = (f"\n\nLoudness: {summary['reached_target']} of {summary['cues']} replacements reached their target"
+            + (" (the original's loudness)" if summary["mode"] == "match" else "") + ".")
+    if summary.get("below_target"):
+        text += (f" {summary['below_target']} stay up to {summary['most_below_db']:g} dB quieter so their peaks do "
+                 "not distort.")
+    return text
 
 
 class BuildPage(QWidget):
@@ -56,10 +70,21 @@ class BuildPage(QWidget):
         self.layout_box = QComboBox()
         for key, label in LAYOUT_LABELS.items():
             self.layout_box.addItem(label, key)
-        self.normalize = QCheckBox("Even out loudness between tracks")
+        self.loudness_box = QComboBox()
+        for key, label in LOUDNESS_LABELS.items():
+            self.loudness_box.addItem(label, key)
+        self.loudness_box.setToolTip(
+            "Automatic: each replacement is made as loud as the game's original music for that cue (measured by "
+            "'Analyse game audio'); cues whose original was not measured use the target below.\n"
+            "Fixed: every replacement is made as loud as the target below.\n"
+            "Own level: tracks keep their loudness.\n\n"
+            "In every mode a track is never raised so far that its peaks would distort (true peak at most -1 dBTP); "
+            "such a track stays a little quieter and the build report says by how much.")
+        self.loudness_box.currentIndexChanged.connect(self._loudness_changed)
         self.target = QDoubleSpinBox()
         self.target.setRange(-30.0, -8.0)
-        self.target.setSuffix(" dBFS RMS")
+        self.target.setDecimals(1)
+        self.target.setSuffix(" LUFS")
         self.make_zip = QCheckBox("Also create a .zip file")
         self.encoder_box = QComboBox()
         for key, label in ENCODER_LABELS.items():
@@ -67,7 +92,7 @@ class BuildPage(QWidget):
         self.encoder_box.currentIndexChanged.connect(self._encoder_changed)
         for label, widget in (("Mod name", self.name), ("Author", self.author), ("Version", self.version),
                               ("Description", self.description), ("Layout", self.layout_box),
-                              ("Audio format", self.encoder_box), ("", self.normalize),
+                              ("Audio format", self.encoder_box), ("Loudness", self.loudness_box),
                               ("Loudness target", self.target), ("", self.make_zip)):
             form.addRow(label, widget)
         settings_card.body.addLayout(form)
@@ -139,8 +164,9 @@ class BuildPage(QWidget):
         self.version.setText(s.version)
         self.description.setText(s.description)
         self.layout_box.setCurrentIndex(max(0, self.layout_box.findData(s.layout)))
-        self.normalize.setChecked(s.normalize)
-        self.target.setValue(s.target_rms_dbfs)
+        self.loudness_box.setCurrentIndex(max(0, self.loudness_box.findData(s.loudness_mode)))
+        self.target.setValue(s.target_lufs)
+        self._loudness_changed()
         self.make_zip.setChecked(s.make_zip)
         self.encoder_box.blockSignals(True)
         self.encoder_box.setCurrentIndex(max(0, self.encoder_box.findData(s.encoder)))
@@ -188,8 +214,8 @@ class BuildPage(QWidget):
         base = self.host.studio.build_settings()
         return replace(base, mod_name=self.name.text().strip() or base.mod_name, author=self.author.text().strip(),
                        version=self.version.text().strip() or "1.0.0", description=self.description.text().strip(),
-                       layout=self.layout_box.currentData(), normalize=self.normalize.isChecked(),
-                       target_rms_dbfs=self.target.value(), make_zip=self.make_zip.isChecked(),
+                       layout=self.layout_box.currentData(), loudness_mode=self.loudness_box.currentData(),
+                       target_lufs=self.target.value(), make_zip=self.make_zip.isChecked(),
                        encoder=self.encoder_box.currentData())
 
     # ------------------------------------------------------------------ Wwise
@@ -207,6 +233,13 @@ class BuildPage(QWidget):
                                      "working Crimson Desert music mod uses. Press <b>Get Wwise…</b> for the "
                                      f"installer (Wwise {status['recommended']} recommended).")
         self.test_wwise_btn.setEnabled(status["found"])
+
+    def _loudness_changed(self, _index: int = 0) -> None:
+        mode = self.loudness_box.currentData()
+        self.target.setEnabled(mode != "off")
+        self.target.setToolTip("The loudness every replacement gets." if mode == "fixed" else
+                               "Used only for cues whose original music was not measured." if mode == "match" else
+                               "Not used: tracks keep their own level.")
 
     def _encoder_changed(self, _index: int) -> None:
         studio = self.host.studio
@@ -262,6 +295,7 @@ class BuildPage(QWidget):
             notes = "\n".join(f"• {w}" for w in result.warnings[:8])
             self.host.info("Mod built", f"The mod was built and validated:\n{result.output_dir}"
                            + (f"\n{result.zip_path}" if result.zip_path else "")
+                           + loudness_text(result.report.get("loudness"))
                            + (f"\n\nNotes:\n{notes}" if notes else "")
                            + "\n\nInstall it with your mod manager (DMM or CDUMM).")
 

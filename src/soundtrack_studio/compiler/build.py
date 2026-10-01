@@ -35,6 +35,7 @@ from ..matching.store import MappingEntry
 from . import bnk, wem
 from .archive import CompileError, GameFileReader
 from .audio import TARGET_RATE, FitSettings, map_channels, render_timeline, slice_timeline
+from .loudness import integrated_lufs, level
 from .plan import build_plan, timeline_slice_frames
 from .validate import ValidationResult, report_file_name, validate_output
 
@@ -50,13 +51,15 @@ class BuildSettings:
     version: str = "1.0.0"
     description: str = ""
     layout: str = "crimson_browser"      # crimson_browser (manifest.json + files/) | package_folders (<pkg>/<path>)
-    normalize: bool = True
-    target_rms_dbfs: float = -18.0
+    loudness_mode: str = "match"         # match (each cue as loud as the original it replaces) | fixed | off
+    target_lufs: float = -16.0           # fixed mode; in match mode for cues whose original was not measured
+    ceiling_dbtp: float = -1.0           # no replacement's true peak goes above this (no limiter, no distortion)
     make_zip: bool = True
     encoder: str = "pcm"                 # wwise_vorbis (needs Wwise) | pcm (no extra software; not proven in game)
 
 
 ENCODERS = ("wwise_vorbis", "pcm")
+LOUDNESS_MODES = ("match", "fixed", "off")
 WWISE_BATCH = 24                         # sources per Wwise run (each run has a start-up cost; WAVs are large)
 
 
@@ -88,9 +91,11 @@ def _game_fingerprint(game_root: Path, rel_paths: List[str]) -> Dict[str, Any]:
 
 class ModBuilder:
     def __init__(self, paths: AppPaths, game_root: Path, analyzer_conn, installation_id: int, model: GameMusicModel,
-                 track_paths: Dict[int, Path], settings: BuildSettings, wwise=None) -> None:
+                 track_paths: Dict[int, Path], settings: BuildSettings, wwise=None,
+                 references: Optional[Dict[str, Dict[str, Any]]] = None) -> None:
         self.paths = paths
         self.wwise = wwise                # compiler.wwise.WwiseEncoder for encoder "wwise_vorbis"
+        self.references = references or {}  # cue key -> measured original {"lufs": ..., "rms": ...}
         self.game_root = Path(game_root)
         self.conn = analyzer_conn
         self.installation_id = installation_id
@@ -105,6 +110,8 @@ class ModBuilder:
         report_progress = progress or (lambda *a: None)
         if self.settings.layout not in LAYOUTS:
             raise CompileError("Unknown package layout.", details=self.settings.layout)
+        if self.settings.loudness_mode not in LOUDNESS_MODES:
+            raise CompileError("Unknown loudness setting.", details=self.settings.loudness_mode)
         if self.settings.encoder not in ENCODERS:
             raise CompileError("Unknown audio format.", details=self.settings.encoder)
         vorbis = self.settings.encoder == "wwise_vorbis"
@@ -166,10 +173,11 @@ class ModBuilder:
                 report_progress("Preparing replacement audio", i, len(jobs_by_cue))
                 timeline = None
                 if any(j.role == "music" for j in jobs_by_cue[cue_key]):
-                    fit = FitSettings(entry.fit_mode, entry.start_offset_s, self.settings.normalize,
-                                      self.settings.target_rms_dbfs)
+                    fit = FitSettings(entry.fit_mode, entry.start_offset_s)
                     timeline, info = render_timeline(self.track_paths[entry.track_id], plan.cue_durations[cue_key],
                                                      plan.cue_channels[cue_key], fit)
+                    timeline, loud = self._level(cue_key, timeline)
+                    info.update(loud)
                     cue_report[cue_key] = {"track_id": entry.track_id,
                                            "track_file": self.track_paths[entry.track_id].name,
                                            "duration_s": plan.cue_durations[cue_key], "decided_by": entry.decided_by,
@@ -219,6 +227,7 @@ class ModBuilder:
                 "files_dir": "files" if self.settings.layout == "crimson_browser" else ".",
                 "files": sorted(written), "sources": sources_report, "cues": cue_report,
                 "analyzer_installation": self.installation_id, "warnings": plan.warnings,
+                "loudness": loudness_summary(cue_report, self.settings),
                 "settings": asdict(self.settings),
             }
             if self.settings.layout == "crimson_browser":
@@ -266,6 +275,30 @@ class ModBuilder:
             return BuildResult(shown, zip_path, report, validation, plan.warnings, report_path)
         finally:
             shutil.rmtree(work, ignore_errors=True)
+
+    def _level(self, cue_key: str, timeline: np.ndarray):
+        """One gain for the cue's audio: towards the original's loudness (or the fixed target), never past the
+        true-peak ceiling. Returns the audio and what was done, for the report."""
+
+        mode = self.settings.loudness_mode
+        measured = integrated_lufs(timeline, TARGET_RATE)
+        ref = self.references.get(cue_key) or {}
+        if mode == "off":
+            target, source = None, "own level (only lowered if its peaks were too high)"
+        elif mode == "match" and ref.get("lufs") is not None:
+            target, source = float(ref["lufs"]), "original (measured loudness)"
+        elif mode == "match" and ref.get("rms") is not None and measured is not None:
+            ours_rms = 20 * np.log10(max(float(np.sqrt(np.mean(timeline.astype(np.float64) ** 2))), 1e-9))
+            target, source = measured + (float(ref["rms"]) - ours_rms), "original (estimated from its average level)"
+        else:
+            target = self.settings.target_lufs
+            source = "fixed target" if mode == "fixed" else "fixed target (the original was not measured)"
+        out, result = level(timeline, TARGET_RATE, target, self.settings.ceiling_dbtp, measured=measured)
+        info = result.to_dict()
+        info["loudness_reference"] = source
+        if ref.get("lufs") is not None:
+            info["original_lufs"] = ref["lufs"]
+        return out, info
 
     @staticmethod
     def _piece(job, timeline: Optional[np.ndarray]) -> np.ndarray:
@@ -345,6 +378,20 @@ class ModBuilder:
         if package is None:
             raise CompileError("The Analyzer database does not say which game package holds a file.", details=vpath)
         return package
+
+
+def loudness_summary(cues: Dict[str, Any], settings: BuildSettings) -> Dict[str, Any]:
+    """How the cues came out: how many reached their target, how many stayed below it to keep peaks clean."""
+
+    short = [c.get("short_of_target_db") or 0.0 for c in cues.values()]
+    below = [x for x in short if x >= 0.5]
+    sources: Dict[str, int] = {}
+    for c in cues.values():
+        key = c.get("loudness_reference", "")
+        sources[key] = sources.get(key, 0) + 1
+    return {"mode": settings.loudness_mode, "ceiling_dbtp": settings.ceiling_dbtp, "cues": len(cues),
+            "reached_target": len(short) - len(below), "below_target": len(below),
+            "most_below_db": round(max(below), 1) if below else 0.0, "references": sources}
 
 
 def _readme(name: str, report: Dict[str, Any], settings: BuildSettings) -> str:
