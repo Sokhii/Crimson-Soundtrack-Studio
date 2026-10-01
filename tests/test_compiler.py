@@ -274,3 +274,20 @@ def test_output_decodes_with_vgmstream(built, tmp_path):
         meta = subprocess.run([VGMSTREAM, "-m", str(target)], capture_output=True, text=True).stdout
         assert "Audiokinetic Wwise" in meta and "16-bit Little Endian PCM" in meta, meta
         assert f"stream total samples: {int(seconds * 48000)} " in meta, meta
+
+
+def test_slice_timeline_handles_clips_that_start_before_or_run_past_the_segment():
+    timeline = np.arange(1, 101, dtype=np.float32).reshape(-1, 1).repeat(2, axis=1)
+    inside = audio.slice_timeline(timeline, 10, 20)
+    assert inside.shape == (20, 2) and inside[0, 0] == 11 and inside[-1, 0] == 30
+    # a lead-in before the entry point (negative start): silence first, then the timeline from its beginning
+    early = audio.slice_timeline(timeline, -30, 80)
+    assert early.shape == (80, 2) and not early[:30].any() and early[30, 0] == 1 and early[-1, 0] == 50
+    # the same shape as the failure seen in a real build: a long clip with a 2.25 s lead-in
+    long_clip = audio.slice_timeline(timeline, -108, 5000)
+    assert long_clip.shape == (5000, 2) and not long_clip[:108].any() and long_clip[108, 0] == 1
+    assert long_clip[108 + 99, 0] == 100 and not long_clip[108 + 100:].any()
+    # running past the end, starting past the end, and entirely before the start
+    assert audio.slice_timeline(timeline, 90, 30)[9, 0] == 100 and not audio.slice_timeline(timeline, 90, 30)[10:].any()
+    assert not audio.slice_timeline(timeline, 500, 10).any()
+    assert not audio.slice_timeline(timeline, -50, 20).any()

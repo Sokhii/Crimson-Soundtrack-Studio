@@ -161,6 +161,19 @@ def normalize(x: np.ndarray, target_rms_dbfs: float, peak_limit_dbfs: float) -> 
     return y.astype(np.float32), round(20 * math.log10(gain), 2)
 
 
+def slice_timeline(timeline: np.ndarray, start: int, frames: int) -> np.ndarray:
+    """``frames`` frames of the segment timeline beginning at frame ``start``.
+
+    A clip may begin before the segment does (a negative ``start``: lead-in before the entry point) or end after it;
+    whatever lies outside the timeline is silence."""
+
+    piece = np.zeros((frames, timeline.shape[1]), np.float32)
+    lo, hi = max(0, start), min(len(timeline), start + frames)
+    if hi > lo:
+        piece[lo - start:hi - start] = timeline[lo:hi]
+    return piece
+
+
 def render_timeline(path: Path, duration_s: float, channels: int, fit: FitSettings) -> Tuple[np.ndarray, dict]:
     """The user's track rendered onto a segment timeline of ``duration_s`` at 48 kHz."""
 

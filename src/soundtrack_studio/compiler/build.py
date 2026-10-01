@@ -33,7 +33,7 @@ from ..game_model.model import GameMusicModel
 from ..matching.store import MappingEntry
 from . import bnk, wem
 from .archive import CompileError, GameFileReader
-from .audio import TARGET_RATE, FitSettings, map_channels, render_timeline
+from .audio import TARGET_RATE, FitSettings, map_channels, render_timeline, slice_timeline
 from .plan import build_plan, timeline_slice_frames
 from .validate import ValidationResult, validate_output
 
@@ -224,10 +224,7 @@ class ModBuilder:
                       sources_report: Dict[str, Any], embedded: Dict[int, bytes]) -> None:
         start, frames = timeline_slice_frames(job, TARGET_RATE)
         if job.role == "music" and timeline is not None:
-            piece = np.zeros((frames, timeline.shape[1]), np.float32)
-            available = max(0, min(frames, len(timeline) - start))
-            if available:
-                piece[:available] = timeline[start:start + available]
+            piece = slice_timeline(timeline, start, frames)
             if piece.shape[1] != job.channels:
                 piece = map_channels(piece, job.channels)
         else:
