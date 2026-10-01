@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from ..app_paths import MODEL_TIERS, AppPaths
+from ..app_paths import MODEL_TIERS, AppPaths, is_file, long_path
 from ..errors import StudioError
 
 log = logging.getLogger(__name__)
@@ -223,15 +223,15 @@ def register_custom_model(paths: AppPaths, registry: ModelRegistry, gguf_path: P
 def model_status(paths: AppPaths, registry: ModelRegistry, model: LocalModel) -> Dict[str, Any]:
     state = registry.state(model.id)
     path = model.install_path(paths)
-    present = path.is_file()
+    present = is_file(path)
     partial = path.with_name(path.name + ".part")
     status = state.get("status") or ("available" if present else "not_downloaded")
     if not present and status in ("available", "verified"):
         status = "missing"
-    if not present and partial.is_file():
+    if not present and is_file(partial):
         status = "partial"
     return {"id": model.id, "present": present, "path": str(path), "status": status,
-            "partial_bytes": partial.stat().st_size if partial.is_file() else 0,
+            "partial_bytes": long_path(partial).stat().st_size if is_file(partial) else 0,
             "sha256": state.get("sha256"), "verified_at": state.get("verified_at"),
             "hash_checked_against_source": state.get("hash_checked_against_source"),
             "inference_ok": state.get("inference_ok"), "tier": model.tier}

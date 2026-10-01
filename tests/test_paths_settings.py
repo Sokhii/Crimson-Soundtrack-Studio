@@ -159,3 +159,10 @@ def test_is_file_goes_through_the_long_path_prefix(tmp_path, monkeypatch):
             "Music\\Ramin Djawadi\\Game Of Thrones Season 2 (Music From The HBO Series)\\Don't Die With A Clean Sword - "
             "From The Game Of Thrones Season 2 Soundtrack - Ramin Djawadi.flac")
     assert len(name) > 260 and os_path(name, windows=True).startswith("\\\\?\\C:\\Users\\Matthew")
+
+
+def test_long_path_helper_follows_os_path(tmp_path):
+    from soundtrack_studio import app_paths
+
+    p = tmp_path / "x.gguf"
+    assert app_paths.long_path(p) == Path(os_path(p))

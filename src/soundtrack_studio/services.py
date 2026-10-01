@@ -22,7 +22,7 @@ from .ai.runtime import InferenceBackend, LlamaServerBackend, find_llama_server,
 from .analyzer_db import compat
 from .analyzer_db.importer import ImportedDatabase, import_database, load_imported, source_changed
 from .analyzer_db.reader import AnalyzerReader
-from .app_paths import AppPaths, os_path
+from .app_paths import AppPaths, is_file, long_path, os_path
 from .config import Settings
 from .errors import AnalyzerDbError, GameInstallError, LibraryError, ProjectError
 from .game_model.builder import load_or_build
@@ -324,7 +324,7 @@ class Studio:
         try:
             result = downloader.download_model(model, self.paths, progress, cancel)
         except BaseException:
-            present = model.install_path(self.paths).is_file()
+            present = is_file(model.install_path(self.paths))
             self.registry.update(model.id, status="available" if present else "not_downloaded")
             raise
         self.registry.update(model.id, status="verified", sha256=result["sha256"], size=result["size"],
@@ -337,7 +337,7 @@ class Studio:
     def verify_model(self, model_id: str, cancel=None) -> Dict[str, Any]:
         model = self._catalog_model(model_id)
         path = model.install_path(self.paths)
-        if not path.is_file():
+        if not is_file(path):
             raise ModelError("The model file is missing.", hint="Download it again.", details=str(path))
         expected = {}
         known = self.registry.state(model.id).get("sha256")
@@ -356,8 +356,8 @@ class Studio:
             self.registry.forget(model.id)  # the user's own file is never deleted
         else:
             for candidate in (path, path.with_name(path.name + ".part")):
-                if self.paths.is_inside(candidate) and candidate.is_file():
-                    candidate.unlink()
+                if self.paths.is_inside(candidate) and is_file(candidate):
+                    long_path(candidate).unlink()
             self.registry.update(model.id, status="not_downloaded", sha256=None, verified_at=None, inference_ok=None)
         if self.settings.ai_model_id == model.id:
             self.settings.ai_model_id = ""
@@ -378,7 +378,7 @@ class Studio:
         if not self.settings.ai_model_id:
             return None
         model = self.catalog().get(self.settings.ai_model_id)
-        return model if model and model.install_path(self.paths).is_file() else None
+        return model if model and is_file(model.install_path(self.paths)) else None
 
     def _make_llama_backend(self, model: LocalModel) -> InferenceBackend:
         return LlamaServerBackend(self.paths, model, server_path=self.runtime_path(),
@@ -560,16 +560,16 @@ class Studio:
         results = {}
         for i, f in enumerate(model.files, 1):
             target = folder / f.path
-            if target.is_file() and self.registry.state(model.id).get("files", {}).get(f.path):
+            if is_file(target) and self.registry.state(model.id).get("files", {}).get(f.path):
                 continue
             label = f"Downloading listening model ({i}/{len(model.files)})"
             source = {"url": model.url(f), "sha256": f.sha256, "size": f.size, "repository": model.repository}
             results[f.path] = downloader.download_file(source, target, self.paths, progress, cancel, label, magic=None)
             if f.sha256 is None:
                 try:
-                    validate_small_file(target, f.role)
+                    validate_small_file(long_path(target), f.role)
                 except (OSError, ValueError) as exc:
-                    target.unlink(missing_ok=True)
+                    long_path(target).unlink(missing_ok=True)
                     raise ModelError("A downloaded listening model file is not valid and was removed.",
                                      hint="Try the download again.", details=f"{f.path}: {exc}") from exc
             files = dict(self.registry.state(model.id).get("files", {}))

@@ -204,6 +204,12 @@ def os_path(path: Path | str, *, windows: Optional[bool] = None, force: bool = F
     return "\\\\?\\" + text
 
 
+def long_path(path: Path | str) -> Path:
+    """``path`` that Windows opens even beyond 260 characters (extended-length prefix); unchanged elsewhere."""
+
+    return Path(os_path(path))
+
+
 def is_file(path: Path | str) -> bool:
     """``Path.is_file()`` for user files: also true for paths beyond Windows' 260-character limit."""
 

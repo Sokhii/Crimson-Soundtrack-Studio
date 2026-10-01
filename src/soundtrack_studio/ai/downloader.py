@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Callable, List, Optional
 
 from .. import __version__
-from ..app_paths import AppPaths
+from ..app_paths import AppPaths, long_path
 from ..errors import OperationCancelled
 from .catalog import LocalModel, ModelError
 
@@ -122,6 +122,9 @@ def download_file(source: dict, target: Path, paths: AppPaths, progress: Progres
     url = source["url"]
     if not paths.is_inside(target):
         raise ModelError("Models must be stored inside the application's models folder.", details=str(target))
+    # the Studio's folder can already be 200 characters deep: open every file through the long-path form
+    final = target
+    target = long_path(target)
     target.parent.mkdir(parents=True, exist_ok=True)
     partial = target.with_name(target.name + ".part")
     expected = {k: source[k] for k in ("sha256", "size") if source.get(k)}
@@ -171,13 +174,14 @@ def download_file(source: dict, target: Path, paths: AppPaths, progress: Progres
         progress(label.replace("Downloading", "Verifying"), 0, 0)
     result = verify_file(partial, expected, cancel, magic)
     partial.replace(target)
-    result.update({"path": str(target), "source_url": url, "repository": source.get("repository")})
+    result.update({"path": str(final), "source_url": url, "repository": source.get("repository")})
     return result
 
 
 def verify_file(path: Path, expected: Optional[dict] = None, cancel: Cancel = None,
                 magic: Optional[bytes] = b"GGUF") -> dict:
     expected = expected or {}
+    path = long_path(path)
     size = path.stat().st_size
     if magic is not None:
         with open(path, "rb") as handle:
