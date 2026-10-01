@@ -14,7 +14,7 @@ import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 import contextlib
-from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional, Tuple
 
 from .ai import downloader, hardware
 from .ai.catalog import LocalModel, ModelCatalog, ModelError, ModelRegistry, model_status, register_custom_model
@@ -79,7 +79,7 @@ class Studio:
         self._clap_key = ""
         self._prompt_bank = None
         self._listening_epoch = 0          # bumped whenever what was heard (or the library) changes
-        self._calibration = None           # (signature, Calibration)
+        self._calibration: Dict[str, Any] = {}      # scope -> (signature, Calibration)
         self._backend: Optional[InferenceBackend] = None
         self._hardware: Optional[hardware.HardwareInfo] = None
         self.registry = ModelRegistry(paths)
@@ -733,25 +733,34 @@ class Studio:
                     return None
         return bank if bank is not None and bank.complete() else None
 
-    def calibration(self):
-        """Per-word baselines over everything analysed (your tracks plus the game's music); None without listening."""
+    def calibration(self, game_only: bool = False):
+        """Per-word baselines (None without listening).
+
+        By default over everything analysed (your tracks plus the game's music), which is what track descriptions and
+        matching use. ``game_only`` judges the game's music against the game's music alone, so a game cue's description
+        does not depend on your library: the same cue gets the same evidence in every project, and its saved AI
+        description is reused instead of being written again.
+        """
 
         from .listening.calibration import Calibration
 
         key = self.listening_key()
         if not key or self.project is None:
             return None
+        scope = "game" if game_only else "all"
         signature = (key, self._listening_epoch, self.project.folder)
-        if self._calibration is not None and self._calibration[0] == signature:
-            return self._calibration[1]
+        cached = self._calibration.get(scope)
+        if cached is not None and cached[0] == signature:
+            return cached[1]
         bank = self._prompt_bank_for(key)
         if bank is None:
             return None
         model = self.game_model() if self.project.active_analyzer() else None
         tracks, cues = self.sound_embeddings(model) if model is not None else (
             {tid: e for tid, e in self._track_embeddings(key).items()}, {})
-        calibration = Calibration(bank, list(tracks.values()) + list(cues.values()))
-        self._calibration = (signature, calibration)
+        reference = list(cues.values()) if game_only and cues else list(tracks.values()) + list(cues.values())
+        calibration = Calibration(bank, reference)
+        self._calibration[scope] = (signature, calibration)
         return calibration
 
     def _track_embeddings(self, key: str) -> Dict[int, Any]:
@@ -760,12 +769,13 @@ class Studio:
         return {tid: e for tid, r in self.track_listening().items()
                 if r.get("model") == key and (e := embedding_of(r)) is not None}
 
-    def heard_summary(self, listening: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-        """What the listening model heard: vocals (verdict + 0-100) and standout tags with 0-100 scores, or None."""
+    def heard_summary(self, listening: Optional[Dict[str, Any]], game_only: bool = False) -> Optional[Dict[str, Any]]:
+        """What the listening model heard: vocals (verdict + 0-100) and standout tags with 0-100 scores, or None.
+        ``game_only`` is for game cues (see ``calibration``)."""
 
         if not listening or not listening.get("embedding"):
             return None
-        calibration = self.calibration()
+        calibration = self.calibration(game_only=game_only)
         return calibration.summary(listening) if calibration is not None else None
 
     # ------------------------------------------------------------ semantics
@@ -785,7 +795,7 @@ class Studio:
         for c in model.cues:
             if include_short_cues or not self.is_short_cue(c):
                 measured, heard = self.cue_audio(c, audio) if audio else (None, None)
-                items.append((str(c.segment_id), cue_document(model, c, measured, self.heard_summary(heard))))
+                items.append((str(c.segment_id), cue_document(model, c, measured, self.heard_summary(heard, game_only=True))))
         return items
 
 
@@ -793,8 +803,11 @@ class Studio:
     def is_short_cue(cue) -> bool:
         return cue.is_transition or (cue.duration_ms is not None and cue.duration_ms < SHORT_CUE_MS)
 
-    def analyze_semantics(self, use_ai: bool = True, progress=None, cancel=None) -> Dict[str, RunStats]:
-        """Describe user tracks and game cues (rules always; local AI when a model is selected)."""
+    def analyze_semantics(self, use_ai: bool = True, progress=None, cancel=None,
+                          redo: Iterable[str] = ()) -> Dict[str, RunStats]:
+        """Describe user tracks and game cues (rules always; local AI when a model is selected).
+
+        ``redo`` ("track" and/or "cue") makes the AI describe those again even when a saved answer exists."""
 
         store = self.semantic_store()
         backend = self.backend() if use_ai else None
@@ -812,11 +825,12 @@ class Studio:
                                                  getattr(exc, "details", ""))
         if self.active_listening_model() is not None:
             self.listen_to_library(progress, cancel)
+        redo = set(redo)
         tracks = self.semantic_items("track")
-        results["track"] = store.run("track", tracks, backend, model_key, progress, cancel)
+        results["track"] = store.run("track", tracks, backend, model_key, progress, cancel, force="track" in redo)
         store.forget_missing("track", [k for k, _d in tracks])
         cues = self.semantic_items("cue", include_short_cues=True)
-        results["cue"] = store.run("cue", cues, backend, model_key, progress, cancel)
+        results["cue"] = store.run("cue", cues, backend, model_key, progress, cancel, force="cue" in redo)
         project = self.require_project()
         project.set("semantics_last_run", {"at": now_iso(), "model": backend.model_id if backend else "",
                                            "tracks": len(tracks), "cues": len(cues)})

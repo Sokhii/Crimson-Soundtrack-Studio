@@ -167,6 +167,30 @@ def test_game_audio_is_listened_to(listening_studio, tmp_path, monkeypatch):
     assert -1.0 <= sounds_alike(track, heard) <= 1.0
 
 
+def test_game_cue_evidence_does_not_depend_on_the_library(listening_studio, tmp_path, monkeypatch):
+    """A game cue gets the same evidence in every project, so its saved AI description is reused."""
+
+    from test_game_audio import _fake_decoder
+    from soundtrack_studio.listening import calibration as calibration_module
+
+    monkeypatch.setattr(calibration_module, "MIN_REFERENCE", 3)
+    s = listening_studio
+    s.select_listening_model(CLAP_MUSIC_SPEECH.id)
+    game = extract_analyzer_fake_install(tmp_path / "Crimson Desert")
+    s.import_analyzer(ANALYZER_FAKE_INSTALL_DB)
+    s.set_game_path(game)
+    monkeypatch.setenv("CSS_VGMSTREAM", str(_fake_decoder(tmp_path)))
+    s.analyze_semantics(use_ai=False)
+    before = dict(s.semantic_items("cue", include_short_cues=True))
+    assert any("heard" in d for d in before.values())
+    assert s.calibration(game_only=True).calibrated and s.calibration(game_only=True) is not s.calibration()
+    write_test_flac(tmp_path / "Music" / "Third.flac", seconds=25, bpm=90, tone_hz=330, tags={"TITLE": "Third"})
+    s.scan_library()
+    s.analyze_semantics(use_ai=False)
+    assert dict(s.semantic_items("cue", include_short_cues=True)) == before
+    assert len(s.track_listening()) == 3
+
+
 def test_delete_listening_model(listening_studio):
     s = listening_studio
     s.select_listening_model(CLAP_MUSIC_SPEECH.id)

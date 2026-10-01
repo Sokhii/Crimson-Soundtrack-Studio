@@ -88,6 +88,10 @@ class MatchingPage(QWidget):
         bar = QHBoxLayout()
         self.describe_btn = QPushButton("1. Describe music")
         self.describe_btn.clicked.connect(host.describe_music)
+        self.redescribe_btn = QPushButton("Re-describe…")
+        self.redescribe_btn.setToolTip("Have the AI write the descriptions again from scratch, ignoring saved answers "
+                                       "(the game's music, your library, or both).")
+        self.redescribe_btn.clicked.connect(host.redescribe_music)
         self.match_btn = QPushButton("2. Find matches")
         self.match_btn.clicked.connect(self.find_matches)
         self.use_ai = QCheckBox("Use local AI to judge the best candidates")
@@ -133,7 +137,7 @@ class MatchingPage(QWidget):
             action.toggled.connect(self._approve_levels_changed)
             self.approve_actions[level] = action
         self.accept_all_btn.setMenu(self.approve_menu)
-        for w in (self.describe_btn, self.match_btn, self.use_ai, self.standout, self.use_sound, self.allow_reuse,
+        for w in (self.describe_btn, self.redescribe_btn, self.match_btn, self.use_ai, self.standout, self.use_sound, self.allow_reuse,
                   self.max_uses, self.include_short):
             bar.addWidget(w)
         bar.addStretch(1)
@@ -209,6 +213,7 @@ class MatchingPage(QWidget):
         has_data = studio.project is not None and studio.project.active_analyzer() is not None
         for w in (self.describe_btn, self.match_btn, self.accept_all_btn):
             w.setEnabled(has_data)
+        self.redescribe_btn.setEnabled(has_data and studio.active_model() is not None)
         listening = studio.active_listening_model() is not None
         self.use_sound.setEnabled(listening)
         self.standout.setEnabled(listening)

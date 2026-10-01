@@ -356,7 +356,7 @@ class GameDataPage(QWidget):
             if measured.get(key) is not None:
                 parts.append(f"{label} {fmt.format(measured[key])}")
         out = "<h4>Measured from the game audio</h4><p>" + esc(" · ".join(parts) or "no measurements") + "</p>"
-        summary = self.host.studio.heard_summary(heard)
+        summary = self.host.studio.heard_summary(heard, game_only=True)
         if summary:
             out += "<h4>Heard by the listening model</h4><p>" + esc(_heard_text(summary)).replace("\n", "<br>") + "</p>"
         return out

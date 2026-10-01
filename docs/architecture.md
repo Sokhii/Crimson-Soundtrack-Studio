@@ -172,6 +172,14 @@ stand out for both and strong cue words the track lacks. `Match by standout scor
 between this and the legacy tag overlap; without the listening model the legacy matching is always used. Accepted,
 rejected and chosen tracks are never changed by either mode.
 
+**Game descriptions are shared between projects.** A game cue is judged against the game's music alone
+(`Studio.calibration(game_only=True)`), so its evidence document, and therefore its key in the shared AI answer cache
+(`data/cache/ai_responses.sqlite3`), does not depend on the user's library. A new project (or a changed library) finds
+every cue already described and only the user's tracks are described. Track descriptions and matching still use the
+combined reference. `Re-describe…` (AI Model and Matching pages) has the AI write the chosen descriptions again
+(`analyze_semantics(redo=("cue", "track"))`, `SemanticStore.run(force=True)`), ignoring saved and cached answers; the
+user's edits and matching decisions are kept.
+
 ## Matching
 
 Unit: the MusicSegment (see `docs/research/modding_format.md`). Deterministic eligibility and filtering,

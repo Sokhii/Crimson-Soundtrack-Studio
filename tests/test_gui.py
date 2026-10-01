@@ -230,6 +230,19 @@ def test_listening_model_panel_and_game_audio_buttons(app, window, tmp_path, mon
     assert "Measured from the game audio" in html and "Heard by the listening model" in html
 
 
+def test_redescribe_buttons_and_dialog(app, window):
+    from soundtrack_studio.ui.main_window import RedescribeDialog
+
+    assert window.pages["ai"].redescribe_btn.text().startswith("Re-describe")
+    assert window.pages["matching"].redescribe_btn.text().startswith("Re-describe")
+    dialog = RedescribeDialog(window)
+    assert set(dialog.chosen()) == {"cue", "track"}
+    dialog.game.setChecked(False)
+    assert dialog.chosen() == ("track",)
+    dialog.library.setChecked(False)
+    assert dialog.chosen() == ()
+
+
 def test_matching_page_approve_menu_controls_which_levels_are_approved(app, window):
     studio = window.studio
     page = window.pages["matching"]

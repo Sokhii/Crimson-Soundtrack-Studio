@@ -172,8 +172,12 @@ class SemanticStore:
 
     def run(self, entity_type: str, items: List[Tuple[str, Dict[str, Any]]], backend: Optional[InferenceBackend] = None,
             model_key: str = "", progress: Optional[Callable[[str, int, int], None]] = None,
-            cancel: Optional[Callable[[], bool]] = None, max_llm_failures: int = 5) -> RunStats:
-        """Describe ``items`` = [(entity_key, evidence document)]; resumable, committed per item."""
+            cancel: Optional[Callable[[], bool]] = None, max_llm_failures: int = 5,
+            force: bool = False) -> RunStats:
+        """Describe ``items`` = [(entity_key, evidence document)]; resumable, committed per item.
+
+        ``force`` has the AI write every description again, ignoring saved and cached answers (the new answers replace
+        them); the user's own edits are separate and untouched."""
 
         describe_rules = rules.describe_track if entity_type == "track" else rules.describe_cue
         stats = RunStats(total=len(items))
@@ -194,12 +198,12 @@ class SemanticStore:
             if backend is None:
                 continue
             l_row = existing.get((key, "llm"))
-            if (l_row and l_row["status"] == "ok" and l_row["input_hash"] == ihash and l_row["model_id"] == backend.model_id
+            if (not force and l_row and l_row["status"] == "ok" and l_row["input_hash"] == ihash and l_row["model_id"] == backend.model_id
                     and l_row["prompt_version"] == llm.PROMPT_VERSION):
                 stats.skipped += 1
                 continue
             cache_key = ResponseCache.key(model_key or backend.model_id, entity_type, ihash)
-            cached = self.cache.get(cache_key) if self.cache else None
+            cached = self.cache.get(cache_key) if self.cache and not force else None
             if cached is not None:
                 cached.source, cached.model_id = "llm", backend.model_id
                 self._store(entity_type, key, "llm", ihash, cached, model_id=backend.model_id)

@@ -51,8 +51,13 @@ class AIPage(QWidget):
         self.none_btn.clicked.connect(lambda: self._select(""))
         self.describe_btn = QPushButton("Describe music now")
         self.describe_btn.clicked.connect(host.describe_music)
+        self.redescribe_btn = QPushButton("Re-describe…")
+        self.redescribe_btn.setToolTip("Have the AI write the descriptions again from scratch, ignoring saved answers "
+                                       "(the game's music, your library, or both).")
+        self.redescribe_btn.clicked.connect(host.redescribe_music)
         row.addWidget(self.none_btn)
         row.addWidget(self.describe_btn)
+        row.addWidget(self.redescribe_btn)
         row.addStretch(1)
         self.active_card.body.addLayout(row)
         top.addWidget(self.active_card, 1)
@@ -163,6 +168,7 @@ class AIPage(QWidget):
         else:
             self.active_label.setText("None: rule-based descriptions from tags, names and measurements.")
         self.describe_btn.setEnabled(studio.project is not None)
+        self.redescribe_btn.setEnabled(studio.project is not None and model is not None)
         self.fill_table()
         self.fill_listening()
 

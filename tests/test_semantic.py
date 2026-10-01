@@ -95,6 +95,15 @@ def test_rules_only_run_and_effective_profile(store):
     assert store.run("track", ITEMS).rules_done == 0  # unchanged evidence: nothing recomputed
 
 
+def test_force_makes_the_ai_describe_again(store):
+    backend = ScriptedBackend([GOOD])
+    store.run("track", ITEMS, backend, "model-sha")
+    assert len(backend.calls) == 2
+    again = store.run("track", ITEMS, backend, "model-sha", force=True)
+    assert again.llm_done == 2 and again.skipped == 0 and again.llm_from_cache == 0 and len(backend.calls) == 4
+    assert store.run("track", ITEMS, backend, "model-sha").skipped == 2           # and it is saved again
+
+
 def test_llm_run_is_resumable_and_cached(store, paths):
     backend = ScriptedBackend([GOOD])
     stats = store.run("track", ITEMS, backend, "model-sha")

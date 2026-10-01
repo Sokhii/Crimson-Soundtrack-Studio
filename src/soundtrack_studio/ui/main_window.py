@@ -9,7 +9,7 @@ from typing import Callable, Dict, Optional
 
 from PySide6.QtCore import QByteArray, Qt, QTimer, QUrl
 from PySide6.QtGui import QAction, QDesktopServices
-from PySide6.QtWidgets import (QApplication, QDialog, QDialogButtonBox, QHBoxLayout, QInputDialog, QLabel, QListWidget,
+from PySide6.QtWidgets import (QApplication, QCheckBox, QDialog, QDialogButtonBox, QHBoxLayout, QInputDialog, QLabel, QListWidget,
                                QListWidgetItem, QMainWindow, QMessageBox, QProgressBar, QPushButton, QStackedWidget,
                                QVBoxLayout, QWidget)
 
@@ -81,6 +81,36 @@ class ProjectDialog(QDialog):
         if ok and name.strip():
             self.new_name = name.strip()
             self.accept()
+
+
+class RedescribeDialog(QDialog):
+    """Which descriptions the AI should write again."""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Re-describe")
+        layout = QVBoxLayout(self)
+        label = QLabel("The AI writes the chosen descriptions again from scratch, ignoring the saved ones. This can "
+                       "take a long time. Your own edits and your matching decisions are kept.")
+        label.setWordWrap(True)
+        layout.addWidget(label)
+        self.game = QCheckBox("The game's music")
+        self.game.setChecked(True)
+        self.library = QCheckBox("My music library")
+        self.library.setChecked(True)
+        layout.addWidget(self.game)
+        layout.addWidget(self.library)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self._accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def _accept(self) -> None:
+        if self.chosen():
+            self.accept()
+
+    def chosen(self):
+        return tuple(k for k, box in (("cue", self.game), ("track", self.library)) if box.isChecked())
 
 
 class MainWindow(QMainWindow):
@@ -250,7 +280,21 @@ class MainWindow(QMainWindow):
 
         self.run_job("Scanning music library", work, on_done=done)
 
-    def describe_music(self) -> None:
+    def redescribe_music(self) -> None:
+        """Have the AI write the descriptions again (ignoring saved ones); the user's own edits are kept."""
+
+        if self.studio.project is None:
+            return
+        if self.studio.active_model() is None:
+            self.info("Re-describe", "Choose an AI model first (AI Model page). Without one the descriptions are "
+                      "rule-based and there is nothing for the AI to redo.")
+            return
+        dialog = RedescribeDialog(self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        self.describe_music(redo=dialog.chosen())
+
+    def describe_music(self, _checked: bool = False, redo=()) -> None:
         if self.studio.project is None:
             return
         use_ai = self.studio.active_model() is not None
@@ -264,8 +308,10 @@ class MainWindow(QMainWindow):
                              f"{stats.skipped} unchanged, {stats.llm_errors} AI failures")
             self.statusBar().showMessage("Descriptions updated. " + "; ".join(parts), 15000)
 
-        self.run_job("Describing music" + (" with the local AI" if use_ai else " (rule-based)"),
-                     lambda report, cancelled: self.studio.analyze_semantics(use_ai, report, cancelled), on_done=done)
+        self.run_job(("Re-describing music" if redo else "Describing music") +
+                     (" with the local AI" if use_ai else " (rule-based)"),
+                     lambda report, cancelled: self.studio.analyze_semantics(use_ai, report, cancelled, redo=redo),
+                     on_done=done)
 
     def analyze_game_audio(self) -> None:
         if self.studio.project is None:
