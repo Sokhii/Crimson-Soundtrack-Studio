@@ -5,9 +5,10 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox, QHBoxLayout, QHeaderView,
-                               QLabel, QLineEdit, QPushButton, QSpinBox, QSplitter, QTableWidget, QTableWidgetItem, QTextBrowser,
-                               QVBoxLayout, QWidget)
+                               QLabel, QLineEdit, QMenu, QPushButton, QSpinBox, QSplitter, QTableWidget, QTableWidgetItem, QTextBrowser,
+                               QToolButton, QVBoxLayout, QWidget)
 
 from ..matching.engine import MatchSettings, confidence_label
 from .semantic_widgets import profile_html
@@ -15,6 +16,7 @@ from .widgets import esc, fmt_duration
 
 STATUS_COLOR = {"accepted": "#2e9d52", "chosen": "#2e9d52", "proposed": "#1f6fb2", "rejected": "#b3261e",
                 "keep original": "#777777", "unmatched": "#c98a00"}
+APPROVE_LEVELS = ("high", "medium", "low")
 FIT_LABELS = {"auto": "Automatic", "trim": "Trim (fade out)", "loop": "Loop to fill", "pad": "Play once, then silence"}
 
 
@@ -117,8 +119,20 @@ class MatchingPage(QWidget):
         self.allow_reuse.toggled.connect(self.max_uses.setEnabled)
         self.include_short = QCheckBox("Include short/transition cues")
         self.include_short.toggled.connect(lambda _v: self.refresh())
-        self.accept_all_btn = QPushButton("Accept all high-confidence")
+        self.accept_all_btn = QToolButton()
+        self.accept_all_btn.setText("Approve")
+        self.accept_all_btn.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
         self.accept_all_btn.clicked.connect(self.accept_all)
+        self.approve_menu = QMenu(self.accept_all_btn)
+        self.approve_actions: Dict[str, QAction] = {}
+        chosen = set(host.studio.settings.approve_levels)
+        for level in APPROVE_LEVELS:
+            action = self.approve_menu.addAction(f"{level.capitalize()} confidence")
+            action.setCheckable(True)
+            action.setChecked(level in chosen)
+            action.toggled.connect(self._approve_levels_changed)
+            self.approve_actions[level] = action
+        self.accept_all_btn.setMenu(self.approve_menu)
         for w in (self.describe_btn, self.match_btn, self.use_ai, self.standout, self.use_sound, self.allow_reuse,
                   self.max_uses, self.include_short):
             bar.addWidget(w)
@@ -200,6 +214,7 @@ class MatchingPage(QWidget):
         self.standout.setEnabled(listening)
         self.standout.setToolTip(self.standout.toolTip().split("\n\n[")[0] + ("" if listening else
                                  "\n\n[Turn on the listening model on the AI Model page to use standout scores.]"))
+        self._approve_tooltip()
         self.use_ai.setEnabled(studio.active_model() is not None)
         if not self.use_ai.isEnabled():
             self.use_ai.setChecked(False)
@@ -388,12 +403,32 @@ class MatchingPage(QWidget):
                 self.host.info("Fit", str(exc))
             self._after()
 
+    def approve_levels(self) -> List[str]:
+        return [level for level in APPROVE_LEVELS if self.approve_actions[level].isChecked()]
+
+    def _approve_levels_changed(self, _checked: bool = False) -> None:
+        studio = self.host.studio
+        studio.settings.approve_levels = self.approve_levels()
+        studio.settings.save(studio.paths)
+        self._approve_tooltip()
+
+    def _approve_tooltip(self) -> None:
+        levels = self.approve_levels()
+        self.accept_all_btn.setToolTip("Approves the best proposal for every cue that has not been decided yet and "
+                                       f"has: {', '.join(levels) if levels else 'nothing selected'} confidence. "
+                                       "Use the arrow to choose the levels.")
+
     def accept_all(self) -> None:
-        if self.host.confirm("Accept proposals", "Accept every proposal with high confidence? You can still change "
-                             "each one afterwards."):
-            count = self.host.studio.match_store().accept_all(min_confidence=0.6)
+        levels = self.approve_levels()
+        if not levels:
+            self.host.info("Approve", "Choose at least one confidence level with the arrow next to Approve.")
+            return
+        names = " or ".join(levels) if len(levels) < 3 else f"{levels[0]}, {levels[1]} or {levels[2]}"
+        if self.host.confirm("Approve proposals", f"Approve every undecided proposal with {names} confidence? "
+                             "You can still change each one afterwards."):
+            count = self.host.studio.match_store().accept_all(levels=levels)
             self._after()
-            self.host.info("Accept proposals", f"{count} proposals accepted.")
+            self.host.info("Approve proposals", f"{count} proposals approved.")
 
     def _standout_toggled(self, checked: bool) -> None:
         studio = self.host.studio

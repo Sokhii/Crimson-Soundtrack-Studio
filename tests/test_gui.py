@@ -230,6 +230,17 @@ def test_listening_model_panel_and_game_audio_buttons(app, window, tmp_path, mon
     assert "Measured from the game audio" in html and "Heard by the listening model" in html
 
 
+def test_matching_page_approve_menu_controls_which_levels_are_approved(app, window):
+    studio = window.studio
+    page = window.pages["matching"]
+    assert page.accept_all_btn.text() == "Approve" and page.approve_levels() == ["high"]
+    page.approve_actions["medium"].setChecked(True)
+    assert studio.settings.approve_levels == ["high", "medium"]
+    page.approve_actions["high"].setChecked(False)
+    assert studio.settings.approve_levels == ["medium"]
+    assert "medium" in page.accept_all_btn.toolTip()
+
+
 def test_matching_page_max_uses_setting_is_saved_and_follows_reuse(app, window):
     studio = window.studio
     page = window.pages["matching"]

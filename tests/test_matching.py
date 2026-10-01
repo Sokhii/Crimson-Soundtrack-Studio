@@ -93,6 +93,20 @@ def test_max_uses_per_track_caps_repeats(model):
     assert all(r.candidates for r in auto.values())
 
 
+def test_accept_all_only_takes_the_chosen_confidence_levels(matched):
+    studio, _ = matched
+    store = studio.match_store()
+    labels = {k: engine.confidence_label(p[0].confidence) for k, p in store.proposals().items() if p}
+    assert labels
+    assert store.accept_all(levels=[]) == 0
+    wanted = {labels[next(iter(labels))]}
+    expected = sum(1 for v in labels.values() if v in wanted)
+    assert store.accept_all(levels=wanted) == expected
+    assert store.status_counts()["accepted"] == expected
+    # the other levels are still waiting
+    assert store.accept_all(levels=("high", "medium", "low")) == len(labels) - expected
+
+
 def test_rejected_and_fixed_are_respected(model):
     results = Matcher(model, cue_profiles(), tracks(), MatchSettings(), rejected={"2001": {1}},
                       fixed={"2002": 1}).run()

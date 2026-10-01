@@ -12,10 +12,10 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Collection, Dict, List, Optional, Set
 
 from ..project.store import Project, now_iso
-from .engine import CueResult, MatchSettings
+from .engine import CueResult, MatchSettings, confidence_label
 
 ACTIONS = ("accept", "manual", "reject", "keep_original")
 FIT_MODES = ("auto", "trim", "loop", "pad")
@@ -149,15 +149,21 @@ class MatchStore:
         old.fit_mode, old.start_offset_s = fit_mode, max(0.0, float(start_offset_s))
         self._write(old)
 
-    def accept_all(self, min_confidence: float = 0.0) -> int:
+    def accept_all(self, min_confidence: float = 0.0, levels: Optional[Collection[str]] = None) -> int:
+        """Accept the top proposal of every undecided cue; ``levels`` ("high"/"medium"/"low") limits it to those
+        confidence levels (a cue the user rejected earlier is proposed again, as before)."""
+
         decisions = self.decisions()
         count = 0
         for key, props in self.proposals().items():
             if key in decisions and decisions[key].action != "reject":
                 continue
-            if props and props[0].rank == 0 and props[0].confidence >= min_confidence:
-                self.accept(key, props[0].track_id)
-                count += 1
+            if not props or props[0].rank != 0 or props[0].confidence < min_confidence:
+                continue
+            if levels is not None and confidence_label(props[0].confidence) not in levels:
+                continue
+            self.accept(key, props[0].track_id)
+            count += 1
         return count
 
     def rejected_map(self) -> Dict[str, Set[int]]:
