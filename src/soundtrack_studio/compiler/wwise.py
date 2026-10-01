@@ -37,33 +37,63 @@ log = logging.getLogger(__name__)
 DOWNLOAD_PAGE = "https://www.audiokinetic.com/en/download/"
 RECOMMENDED_VERSION = "2023.1"          # the game's soundbanks are version 150, written by Wwise 2023.1
 DEFAULT_CONVERSION = "Vorbis Quality High"
-CONSOLE_REL = Path("Authoring") / "x64" / "Release" / "bin" / "WwiseConsole.exe"
+CONSOLE_RELS = tuple(Path("Authoring") / arch / "Release" / "bin" / "WwiseConsole.exe" for arch in ("x64", "Win32"))
+CONSOLE_REL = CONSOLE_RELS[0]
 PROJECT_NAME = "CssConvert"
+INSTALL_PARENTS = ("Audiokinetic",)     # ...\Audiokinetic\Wwise2023.1.x or ...\Audiokinetic\Wwise 2023.1.x
 
 
 class WwiseError(CompileError):
     title = "Wwise problem"
 
 
+def search_roots() -> List[Path]:
+    """Folders that can contain the Wwise installs: the Launcher's default is C:\\Audiokinetic, older ones used
+    Program Files; other drives are checked too because the install folder is a choice in the Launcher."""
+
+    roots: List[Path] = []
+    for base in (os.environ.get("ProgramFiles(x86)", ""), os.environ.get("ProgramFiles", ""),
+                 r"C:\Program Files (x86)", r"C:\Program Files"):
+        if base:
+            roots.append(Path(base) / "Audiokinetic")
+    for letter in "CDEFGHIJ":
+        roots.append(Path(f"{letter}:\\") / "Audiokinetic")
+        roots.append(Path(f"{letter}:\\") / "Wwise")
+    seen, out = set(), []
+    for r in roots:
+        if str(r).lower() not in seen:
+            seen.add(str(r).lower())
+            out.append(r)
+    return out
+
+
 def _candidates() -> Iterable[Path]:
     root = os.environ.get("WWISEROOT", "")
     if root:
-        yield Path(root) / CONSOLE_REL
-    for base in (os.environ.get("ProgramFiles(x86)", ""), os.environ.get("ProgramFiles", ""),
-                 r"C:\Program Files (x86)", r"C:\Program Files"):
-        if not base:
-            continue
-        folder = Path(base) / "Audiokinetic"
+        for rel in CONSOLE_RELS:
+            yield Path(root) / rel
+    for folder in search_roots():
         try:
             installs = sorted(folder.glob("Wwise*"), reverse=True) if folder.is_dir() else []
         except OSError:
             installs = []
         installs.sort(key=lambda p: RECOMMENDED_VERSION not in p.name)   # the game's version first, then newest
         for install in installs:
-            yield install / CONSOLE_REL
+            for rel in CONSOLE_RELS:
+                yield install / rel
+        if folder.name == "Wwise":                                       # a folder that is itself an install
+            for rel in CONSOLE_RELS:
+                yield folder / rel
     found = shutil.which("WwiseConsole") or shutil.which("WwiseConsole.exe")
     if found:
         yield Path(found)
+
+
+def searched_places() -> List[str]:
+    """Where find_console() looks, for the message shown when nothing is found."""
+
+    places = ([os.environ["WWISEROOT"]] if os.environ.get("WWISEROOT") else []) + [str(r) for r in search_roots()]
+    return places + ["the PATH"]
 
 
 def find_console(override: str = "") -> Optional[Path]:

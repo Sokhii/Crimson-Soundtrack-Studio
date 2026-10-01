@@ -975,12 +975,12 @@ class Studio:
         return find_console(self.settings.wwise_console_path)
 
     def wwise_status(self) -> Dict[str, Any]:
-        from .compiler.wwise import DOWNLOAD_PAGE, RECOMMENDED_VERSION, install_name
+        from .compiler.wwise import DOWNLOAD_PAGE, RECOMMENDED_VERSION, install_name, searched_places
 
         console = self.wwise_console()
         version = install_name(console) if console else ""
         return {"found": console is not None, "console": str(console) if console else "", "version": version,
-                "recommended": RECOMMENDED_VERSION, "download_page": DOWNLOAD_PAGE,
+                "recommended": RECOMMENDED_VERSION, "download_page": DOWNLOAD_PAGE, "searched": searched_places(),
                 "matches_game": bool(version) and RECOMMENDED_VERSION in version}
 
     def set_wwise_console(self, path: str) -> None:

@@ -182,6 +182,9 @@ def test_build_page_builds_a_mod(app, window, tmp_path, monkeypatch):
     page.refresh()
     # the Vorbis format (default) needs Wwise; without it the page says so and PCM still works
     assert page.encoder_box.currentData() == "wwise_vorbis" and "not installed" in page.wwise_label.text()
+    page.find_wwise()                                       # says where it looked instead of doing nothing
+    assert messages[-1][0] == "Find Wwise" and "not found" in messages[-1][1] and "Choose" in messages[-1][1]
+    messages.clear()
     assert not page.build_btn.isEnabled() and "Install Wwise" in page.summary.text()
     page.encoder_box.setCurrentIndex(page.encoder_box.findData("pcm"))
     assert studio.settings.build_encoder == "pcm" and page.build_btn.isEnabled()
@@ -189,6 +192,9 @@ def test_build_page_builds_a_mod(app, window, tmp_path, monkeypatch):
     monkeypatch.setenv("CSS_WWISE_CONSOLE", str(install_fake_wwise(tmp_path / "wwise")))
     page.refresh()
     assert "Found" in page.wwise_label.text() and page.test_wwise_btn.isEnabled()
+    page.find_wwise()
+    assert messages[-1][0] == "Find Wwise" and "Found Wwise" in messages[-1][1]
+    messages.clear()
     assert page.build_btn.isEnabled() and "1</b> confirmed" in page.summary.text()
     page.test_wwise()
     wait(app, window, timeout=60)

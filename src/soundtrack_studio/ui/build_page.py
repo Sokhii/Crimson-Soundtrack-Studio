@@ -93,7 +93,7 @@ class BuildPage(QWidget):
         self.get_wwise_btn = QPushButton("Get Wwise…")
         self.get_wwise_btn.clicked.connect(self.get_wwise)
         self.find_wwise_btn = QPushButton("Find Wwise")
-        self.find_wwise_btn.clicked.connect(self.refresh)
+        self.find_wwise_btn.clicked.connect(self.find_wwise)
         self.choose_wwise_btn = QPushButton("Choose WwiseConsole.exe…")
         self.choose_wwise_btn.clicked.connect(self.choose_wwise)
         self.test_wwise_btn = QPushButton("Test Wwise")
@@ -220,6 +220,17 @@ class BuildPage(QWidget):
         QDesktopServices.openUrl(QUrl(status["download_page"]))
         self.host.info("Get Wwise", WWISE_STEPS.format(version=status["recommended"]))
         self.refresh()
+
+    def find_wwise(self) -> None:
+        self.refresh()
+        status = self.wwise
+        if status["found"]:
+            self.host.info("Find Wwise", f"Found Wwise {status['version'] or ''}:\n{status['console']}")
+            return
+        self.host.info("Find Wwise", "Wwise was not found in the usual places:\n\n" + "\n".join(
+            f"• {p}" for p in status["searched"][:12]) + "\n\nIf it is installed somewhere else, press 'Choose "
+            "WwiseConsole.exe…' and pick  <your Wwise folder>\\Authoring\\x64\\Release\\bin\\WwiseConsole.exe  "
+            "(the Audiokinetic Launcher shows the install folder on the Wwise version's page).")
 
     def choose_wwise(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "Choose WwiseConsole.exe", "", "WwiseConsole (WwiseConsole.exe);;"

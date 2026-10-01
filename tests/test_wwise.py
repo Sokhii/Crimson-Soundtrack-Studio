@@ -214,3 +214,25 @@ def test_long_path_prefix_is_removed_for_wwise():
     assert _plain("\\\\?\\C:\\Studio\\temp\\build-1\\wav") == "C:\\Studio\\temp\\build-1\\wav"
     assert _plain("\\\\?\\UNC\\server\\share\\x") == "\\\\server\\share\\x"
     assert _plain("C:\\plain") == "C:\\plain"
+
+
+def test_find_console_in_launcher_default_and_other_drives(tmp_path, monkeypatch):
+    from soundtrack_studio.compiler import wwise
+
+    monkeypatch.delenv("CSS_WWISE_CONSOLE", raising=False)
+    monkeypatch.delenv("WWISEROOT", raising=False)
+    # the Launcher's default install folder is <drive>:\Audiokinetic\Wwise<version> (no space), older ones used a space
+    for name in ("Wwise 2022.1.0.1", "Wwise2023.1.4.8496"):
+        exe = tmp_path / "D" / "Audiokinetic" / name / "Authoring" / "x64" / "Release" / "bin" / "WwiseConsole.exe"
+        exe.parent.mkdir(parents=True)
+        exe.write_bytes(b"MZ")
+    monkeypatch.setattr(wwise, "search_roots", lambda: [tmp_path / "C" / "Audiokinetic", tmp_path / "D" / "Audiokinetic"])
+    found = wwise.find_console()
+    assert found is not None and "Wwise2023.1.4.8496" in str(found)          # the game's version is preferred
+    assert wwise.install_name(found) == "Wwise2023.1.4.8496"
+    win32 = tmp_path / "E" / "Audiokinetic" / "Wwise2023.1.1.1" / "Authoring" / "Win32" / "Release" / "bin" / "WwiseConsole.exe"
+    win32.parent.mkdir(parents=True)
+    win32.write_bytes(b"MZ")
+    monkeypatch.setattr(wwise, "search_roots", lambda: [tmp_path / "E" / "Audiokinetic"])
+    assert wwise.find_console() == win32
+    assert any("Audiokinetic" in p for p in wwise.searched_places())
