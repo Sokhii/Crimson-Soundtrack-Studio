@@ -328,3 +328,27 @@ def test_long_paths_can_be_created_written_listed_and_removed_on_windows(tmp_pat
     assert [p.name for p in base.rglob("*.wem")] == ["1.wem"]
     shutil.rmtree(base)
     assert not base.exists()
+
+
+def _music_track_bank(body: bytes, object_id: int = 7) -> bytes:
+    hirc = struct.pack("<I", 1) + bytes([bnk.HIRC_MUSIC_TRACK]) + struct.pack("<I", 4 + len(body)) + \
+        struct.pack("<I", object_id) + body
+    return bnk.write_chunks([bnk.Chunk(b"BKHD", struct.pack("<I", 150) + bytes(12)), bnk.Chunk(b"HIRC", hirc)])
+
+
+def test_find_sources_ignores_lookalikes_of_the_source_entry():
+    """Another field of the track that contains the source id must not be taken for the source entry.
+
+    Seen with a real bank: ``source 714910109: bank 0x00000041, database 0x00040001`` - bytes 41 00 00 00 01 before a
+    second occurrence of the id (the playlist entry) look like a source struct whose plugin id ends in 1."""
+
+    sid = 714910109
+    real = struct.pack("<IBIIB", bnk.PLUGIN_VORBIS, 2, sid, 0, 0x00)
+    lookalike = bytes([0x41, 0x00, 0x00, 0x00, 0x01]) + struct.pack("<I", sid) + bytes(8)
+    data = _music_track_bank(bytes(3) + real + bytes(6) + lookalike)
+    refs = bnk.find_sources(data, bnk.parse_chunks(data), 7, sid)
+    assert len(refs) == 1 and refs[0].plugin_id == bnk.PLUGIN_VORBIS and refs[0].stream_type == 2
+    patched, _notes = bnk.patch_bank(data, [bnk.SourcePatch(7, sid, bnk.PLUGIN_VORBIS, 2, 0)])
+    assert bnk.describe_sources(patched)[sid][0].plugin_id == bnk.PLUGIN_PCM
+    # the look-alike bytes themselves are left alone
+    assert patched.endswith(lookalike)

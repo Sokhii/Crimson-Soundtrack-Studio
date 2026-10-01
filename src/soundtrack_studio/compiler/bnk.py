@@ -123,8 +123,9 @@ def find_sources(bank: bytes, chunks: List[Chunk], object_id: int, source_id: in
             head = pos - 5
             if head >= start + 4 and pos + 9 <= end:
                 plugin, stream, sid, inmem, bits = SOURCE_STRUCT.unpack_from(bank, head)
-                plugin_type = plugin & 0x0F
-                if plugin_type == 1 and stream in (0, 1, 2) and sid == source_id:
+                # a codec plugin id is <plugin number><company 0x000><type 1>: its low 16 bits are exactly 0x0001. (Looser
+                # tests matched other fields of the object that merely contain the source id, e.g. the playlist entry.)
+                if (plugin & 0xFFFF) == 0x0001 and stream in (0, 1, 2) and sid == source_id:
                     refs.append(SourceRef(object_id, head, plugin, stream, sid, inmem, bits))
             pos = bank.find(needle, pos + 1, end)
     return refs
