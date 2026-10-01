@@ -14,7 +14,7 @@ Crimson Desert ──► Crimson Desert Analyzer ──► Analyzer SQLite DB �
                                                       your music library   local AI (llama.cpp)
 ```
 
-> **Status: 0.12 (feature-complete beta).** The whole workflow works end to end: project → game → Analyzer
+> **Status: 0.13 (feature-complete beta).** The whole workflow works end to end: project → game → Analyzer
 > database → music library → local AI (optional) → thematic matching → review → build → validated mod
 > package. **It has not yet been verified in the game itself** (the development environment has no game
 > install). Please report results, including which package layout your mod manager imports (see
@@ -50,8 +50,10 @@ Crimson Desert ──► Crimson Desert Analyzer ──► Analyzer SQLite DB �
 8. **Review**: accept, reject, choose another track, keep the original, set the fit mode (trim / loop / play
    once) and a start offset. Only what you accept or choose is built; re-running matching never changes your
    decisions.
-9. **Build**: each accepted track is rendered onto the segment's exact timeline (48 kHz), written as Wwise PCM,
-   and the affected soundbanks are patched so the game's interactive music structure (durations, markers,
+9. **Build**: each accepted track is rendered onto the segment's exact timeline (48 kHz), converted to Wwise
+   Vorbis by your own Wwise installation (the format the game and the working Nexus music mods use; uncompressed
+   PCM is still available without Wwise, but has not been confirmed to play in game), and the affected
+   soundbanks are patched so the game's interactive music structure (durations, markers,
    transitions, playlists) is preserved. The result is validated and saved to `output/<mod name>/` (+ ZIP).
 10. **Install** the package with your mod manager. Your game folder is never modified.
 
@@ -62,8 +64,12 @@ Crimson Desert ──► Crimson Desert Analyzer ──► Analyzer SQLite DB �
 2. Extract it to a folder you can write to (not *Program Files*), e.g. `D:\Tools\Crimson Soundtrack Studio\`.
 3. Run `CrimsonSoundtrackStudio.exe`, create a project and follow the steps on the Home page.
 
-Audio is written as uncompressed PCM (about 11.5 MB per stereo minute) so that no proprietary encoder is
-needed; a large soundtrack replacement can be several GB.
+**Wwise (for the default Vorbis format).** Wwise is Audiokinetic's proprietary audio tool (free for non-commercial
+use) and cannot be shipped with the Studio. On the Build page, *Get Wwise…* opens Audiokinetic's download page and
+explains the install (Audiokinetic Launcher → Wwise 2023.1, the version that matches the game's soundbanks);
+*Find Wwise* / *Test Wwise* then check it. The Studio only runs `WwiseConsole.exe`; all converted files stay in
+its own folder, but Wwise itself is installed in Program Files and keeps settings in your user profile.
+Without Wwise you can choose the PCM format (about 11.5 MB per stereo minute; not proven to play in game).
 
 ## Running from source
 

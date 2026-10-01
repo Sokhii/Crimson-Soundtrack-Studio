@@ -964,7 +964,51 @@ class Studio:
         for key, value in saved.items():
             if hasattr(settings, key):
                 setattr(settings, key, value)
+        settings.encoder = self.settings.build_encoder if self.settings.build_encoder in ("wwise_vorbis", "pcm") \
+            else "wwise_vorbis"                       # an app-wide choice, not per project
         return settings
+
+    # ------------------------------------------------------------------ Wwise (optional dependency)
+    def wwise_console(self) -> Optional[Path]:
+        from .compiler.wwise import find_console
+
+        return find_console(self.settings.wwise_console_path)
+
+    def wwise_status(self) -> Dict[str, Any]:
+        from .compiler.wwise import DOWNLOAD_PAGE, RECOMMENDED_VERSION, install_name
+
+        console = self.wwise_console()
+        version = install_name(console) if console else ""
+        return {"found": console is not None, "console": str(console) if console else "", "version": version,
+                "recommended": RECOMMENDED_VERSION, "download_page": DOWNLOAD_PAGE,
+                "matches_game": bool(version) and RECOMMENDED_VERSION in version}
+
+    def set_wwise_console(self, path: str) -> None:
+        from .compiler.wwise import WwiseError
+
+        if path and not Path(path).is_file():
+            raise WwiseError("That file does not exist.", details=path)
+        self.settings.wwise_console_path = path
+        self.settings.save(self.paths)
+
+    def wwise_encoder(self):
+        from .compiler.wwise import WwiseEncoder
+
+        console = self.wwise_console()
+        return WwiseEncoder(self.paths, console, self.settings.wwise_conversion) if console else None
+
+    def test_wwise(self) -> Dict[str, Any]:
+        import uuid
+
+        from .compiler.wwise import WwiseError
+
+        encoder = self.wwise_encoder()
+        if encoder is None:
+            raise WwiseError("Wwise was not found.", hint="Install it with 'Get Wwise' or choose WwiseConsole.exe.")
+        result = encoder.self_test(self.paths.temp / f"wwise-test-{uuid.uuid4().hex[:8]}")
+        self.paths.logs.mkdir(parents=True, exist_ok=True)
+        (self.paths.logs / "wwise_check.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
+        return result
 
     def save_build_settings(self, settings: BuildSettings) -> None:
         from dataclasses import asdict
@@ -998,7 +1042,9 @@ class Studio:
 
         conn = open_snapshot(snapshot)
         try:
-            builder = ModBuilder(self.paths, Path(game_path), conn, ref["installation_id"], model, tracks, settings)
+            wwise = self.wwise_encoder() if settings.encoder == "wwise_vorbis" else None
+            builder = ModBuilder(self.paths, Path(game_path), conn, ref["installation_id"], model, tracks, settings,
+                                 wwise=wwise)
             result = builder.build(mapping, progress, cancel)
         except OperationCancelled:
             project.execute("UPDATE build SET status='cancelled', finished_at=? WHERE id=?", (now_iso(), build_id))

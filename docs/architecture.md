@@ -194,7 +194,16 @@ user accepts or chooses form the build mapping.
 
 `plan` (primary track gets the music, other layers silence; all banks holding a source, including twins) →
 `audio` (decode, polyphase resample to 48 kHz, channel mapping, trim/loop/pad with fades, loudness
-normalisation, timeline slicing per clip) → `wem` (Wwise PCM) → `archive` (read original banks through the
+normalisation, timeline slicing per clip) → `wem` (Wwise PCM, or a `.wav` per source that `wwise` converts to
+Wwise Vorbis through the user's `WwiseConsole.exe`, 24 sources per run) → `archive` (read original banks through the
 Analyzer's entry records, verify SHA-1) → `bnk` (patch source fields in place, rebuild `DIDX`/`DATA`) →
 `build` (workspace in `temp/`, manifest/README/report) → `validate` (independent re-read of everything) →
 `output/<mod name>/`. Any disagreement between the game files and the Analyzer data aborts the build.
+
+**Vorbis builds (default).** Matching the community mods that are known to play, the soundbanks keep the game's
+Vorbis codec, storage type and flags; only media changes: an in-bank source gets the new `.wem` in `DATA`, a
+prefetch-streamed source gets the first part of its new `.wem` (header, seek table, setup and 0.1 s of audio - a
+plain byte prefix, as in the working mods) with the size field updated, and a plain streamed source needs no bank
+change. Validation checks the Vorbis header (sample count within one block of the segment), that every prefetch
+copy is the beginning of the written file and that in-memory sizes match. Wwise is located through the chosen path,
+`%WWISEROOT%`, `Program Files\Audiokinetic\Wwise*` or `PATH`; its conversion project lives in `data/wwise/`.

@@ -10,6 +10,7 @@
 | 6 Compiler | segment-timeline rendering (resample, fit, loudness), PCM WEMs, verified bank reading and patching (PCM codec, streaming, DIDX/DATA rebuild, twin banks), file-replacement package (Crimson Browser manifest or package folders), independent validation (and vgmstream cross-check in tests), build history, Build page | **done** (in-game test pending: no game in the development environment) |
 | 8 Listening | read-only decoding and measurement of the game's own music (vgmstream, bundled), optional CLAP listening model alongside the description models (instruments, vocals, mood, style; "sounds alike" in matching), descriptions that trust what was heard over names and tags | **done** (verified against the reference implementation in CI; in-game audio decoding to be confirmed with "Test decoding") |
 | 9 Standout scores | calibrated 0-100 scores per word relative to all the music analysed (hub words such as "solemn" stop repeating), ~340-word listening vocabulary (adds rhythm and texture), standout-score matching with a switch back to the legacy tag matching | **done** (repetition measured in CI) |
+| 10 Wwise Vorbis | builds default to Wwise Vorbis made by the user's own Wwise (like every working community music mod); banks keep codec/storage, prefetch copies rebuilt as prefixes of the new files; Build page "Dependencies: Wwise" (Get / Find / Choose / Test); PCM kept as an option | **implemented on branch `claude/wwise-vorbis-build`** (in-game test pending; a PCM build played no music in a user test) |
 | 7 Release | llama.cpp runtime bundled and tested in the Windows build, self-test covering a real build, portability checks on the frozen EXE, versioning (0.9.0), documentation | **done** (1.0 after in-game verification) |
 
 ## Decisions still open (need evidence)
@@ -22,7 +23,8 @@
   (docs/research/listening.md); they can be tuned without listening again, because only embeddings are stored.
 - **Music outside the interactive hierarchy** (played by plain `Sound` objects): currently reported, not offered as cues.
 - **In-game verification** of the output and of DMM's handling of the Crimson Browser manifest.
-- **Smaller audio**: Wwise ADPCM (about 4x smaller than PCM) once its block layout for this engine is verified.
+- **Loudness inside the banks**: Way To Valhalla raises the music's in-bank Volume properties (many by +9 dB);
+  the Studio does not change them yet.
 - **Analyzer schema additions** that would help the Studio: a recorded game build/version (the
   installation check currently relies on file sizes/dates) and a populated `schema_meta` (generator and
   version). These are suggestions for the Analyzer project, not changes made here.

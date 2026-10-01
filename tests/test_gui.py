@@ -1,5 +1,6 @@
 """GUI tests (offscreen). They drive the real widgets through their public slots."""
 
+import json
 import time
 
 import pytest
@@ -168,13 +169,31 @@ def test_build_page_builds_a_mod(app, window, tmp_path, monkeypatch):
     write_test_flac(tmp_path / "Music" / "a.flac", seconds=60, tags={"TITLE": "Theme"})
     studio.set_library_path(tmp_path / "Music")
     studio.scan_library()
+    from soundtrack_studio.testing.fake_wwise import install_fake_wwise
+
+    monkeypatch.delenv("CSS_WWISE_CONSOLE", raising=False)
+    monkeypatch.delenv("WWISEROOT", raising=False)
+    monkeypatch.setattr("soundtrack_studio.compiler.wwise._candidates", lambda: iter(()))
     window.nav.setCurrentRow(5)  # Build
     page = window.pages["build"]
     assert not page.build_btn.isEnabled()  # nothing confirmed yet
     track = studio.library_tracks()[0]["id"]
     studio.match_store().choose("2001", track)
     page.refresh()
+    # the Vorbis format (default) needs Wwise; without it the page says so and PCM still works
+    assert page.encoder_box.currentData() == "wwise_vorbis" and "not installed" in page.wwise_label.text()
+    assert not page.build_btn.isEnabled() and "Install Wwise" in page.summary.text()
+    page.encoder_box.setCurrentIndex(page.encoder_box.findData("pcm"))
+    assert studio.settings.build_encoder == "pcm" and page.build_btn.isEnabled()
+    page.encoder_box.setCurrentIndex(page.encoder_box.findData("wwise_vorbis"))
+    monkeypatch.setenv("CSS_WWISE_CONSOLE", str(install_fake_wwise(tmp_path / "wwise")))
+    page.refresh()
+    assert "Found" in page.wwise_label.text() and page.test_wwise_btn.isEnabled()
     assert page.build_btn.isEnabled() and "1</b> confirmed" in page.summary.text()
+    page.test_wwise()
+    wait(app, window, timeout=60)
+    assert messages and messages[-1][0] == "Test Wwise" and "Wwise works" in messages[-1][1]
+    messages.clear()
     page.name.setText("GUI Mod")
     page.make_zip.setChecked(False)
     page.build()
@@ -182,6 +201,8 @@ def test_build_page_builds_a_mod(app, window, tmp_path, monkeypatch):
     assert not window.errors, window.errors
     assert messages and messages[0][0] == "Mod built"
     assert (studio.paths.output / "GUI Mod" / "manifest.json").is_file()
+    report = json.loads((studio.paths.output / "GUI Mod" / "css_build_report.json").read_text())
+    assert report["codec"] == "vorbis"
     assert page.history.rowCount() == 1 and page.history.item(0, 1).text() == "completed"
 
 

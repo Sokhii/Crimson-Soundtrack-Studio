@@ -1,0 +1,216 @@
+"""Wwise Vorbis builds: header reading, prefetch data, bank patching, the WwiseConsole wrapper and a full build.
+
+Wwise cannot run in CI; ``testing.fake_wwise`` stands in for WwiseConsole.exe with the real header layout.
+"""
+
+import json
+import struct
+
+import numpy as np
+import pytest
+
+from soundtrack_studio.compiler import bnk, wem
+from soundtrack_studio.compiler.archive import CompileError
+from soundtrack_studio.compiler.build import BuildSettings
+from soundtrack_studio.compiler.wwise import WwiseEncoder, WwiseError, find_console, install_name
+from soundtrack_studio.testing.fake_wwise import install_fake_wwise
+from soundtrack_studio.testing.fixtures import ANALYZER_FAKE_INSTALL_DB, extract_analyzer_fake_install, write_test_flac
+from conftest import fingerprint
+
+
+def vorbis_wem(samples=96000, channels=2, seek=64, setup=217, audio=4000, avg=16000) -> bytes:
+    data = bytes(seek) + bytes(range(256))[:setup % 256].ljust(setup, b"s") + bytes((i * 7) % 251 for i in range(audio))
+    config = channels | (1 << 8) | (3 << 12)
+    fmt = struct.pack("<HHIIHHHHI", 0xFFFF, channels, 48000, avg, 0, 0, 0x30, 0, config)
+    fmt += struct.pack("<IIIIII", samples, 0xD9, len(data) - seek, 0, seek, seek + setup) + bytes(0x42 - 0x30)
+    body = b"WAVE" + b"fmt " + struct.pack("<I", len(fmt)) + fmt + b"data" + struct.pack("<I", len(data)) + data
+    return b"RIFF" + struct.pack("<I", len(body)) + body
+
+
+# ----------------------------------------------------------------- headers
+def test_vorbis_header_and_prefetch_prefix():
+    data = vorbis_wem(samples=278710)
+    info = wem.read_wem_info(data)
+    assert info.is_vorbis and info.frames == 278710 and info.channels == 2 and info.fmt_size == 0x42
+    setup, audio = wem.vorbis_offsets(data)
+    assert (setup - info.data_offset, audio - info.data_offset) == (64, 64 + 217)
+    pre = wem.prefetch_prefix(data, seconds=0.1)
+    assert data.startswith(pre) and len(pre) == audio + 1600      # header + seek table + setup + 0.1 s
+    assert wem.prefetch_prefix(data, seconds=60) == data           # never more than the file
+    # the prefix alone is readable (as it sits in a bank)
+    assert wem.read_wem_info(pre, allow_truncated=True).frames == 278710
+    with pytest.raises(CompileError):
+        wem.read_wem_info(pre)
+
+
+def test_write_wav_roundtrip(tmp_path):
+    x = np.stack([np.linspace(-0.5, 0.5, 1000), np.zeros(1000)], axis=1).astype(np.float32)
+    wem.write_wav(tmp_path / "a.wav", x, 48000)
+    import soundfile as sf
+
+    y, rate = sf.read(str(tmp_path / "a.wav"), dtype="float32")
+    assert rate == 48000 and y.shape == (1000, 2) and np.allclose(y, x, atol=1e-4)
+
+
+# -------------------------------------------------------------- bank patch
+def _bank(sources, media):
+    """A minimal v150 bank: one MusicTrack per source (plugin, stream, id, in-memory size) and DIDX/DATA media."""
+
+    hirc = b""
+    for i, (plugin, stream, sid, inmem) in enumerate(sources):
+        body = struct.pack("<I", 100 + i) + bytes(3) + struct.pack("<IBIIB", plugin, stream, sid, inmem, 0) + bytes(6)
+        hirc += bytes([bnk.HIRC_MUSIC_TRACK]) + struct.pack("<I", len(body)) + body
+    didx, data = b"", b""
+    for mid, blob in sorted(media.items()):
+        data += bytes((-len(data)) % 16)
+        didx += struct.pack("<III", mid, len(data), len(blob))
+        data += blob
+    return bnk.write_chunks([bnk.Chunk(b"BKHD", struct.pack("<I", 150) + bytes(12)), bnk.Chunk(b"DIDX", didx),
+                             bnk.Chunk(b"DATA", data), bnk.Chunk(b"HIRC", struct.pack("<I", len(sources)) + hirc)])
+
+
+def test_vorbis_patch_keeps_codec_and_storage_and_swaps_media():
+    V = bnk.PLUGIN_VORBIS
+    old_pre, old_inbank, other = b"P" * 1500, b"I" * 900, b"O" * 700
+    bank = _bank([(V, 1, 111, 1500), (V, 0, 222, 900), (V, 2, 333, 0), (V, 1, 444, 700)],
+                 {111: old_pre, 222: old_inbank, 444: other})
+    new_file = vorbis_wem(audio=9000)
+    new_pre = wem.prefetch_prefix(new_file)
+    new_inbank = vorbis_wem(samples=4800, audio=600)
+    patched, notes = bnk.patch_bank(bank, [
+        bnk.SourcePatch(100, 111, V, 1, 1500, codec="vorbis", prefetch_data=new_pre),
+        bnk.SourcePatch(101, 222, V, 0, None, embedded_data=new_inbank, codec="vorbis"),
+        bnk.SourcePatch(102, 333, V, 2, 0, codec="vorbis")])
+    src = bnk.describe_sources(patched)
+    assert (src[111][0].plugin_id, src[111][0].stream_type, src[111][0].in_memory_size) == (V, 1, len(new_pre))
+    assert (src[222][0].plugin_id, src[222][0].stream_type, src[222][0].in_memory_size) == (V, 0, len(new_inbank))
+    assert (src[333][0].plugin_id, src[333][0].stream_type, src[333][0].in_memory_size) == (V, 2, 0)
+    chunks = bnk.parse_chunks(patched)
+    assert bnk.media_data(chunks, 111) == new_pre and bnk.media_data(chunks, 222) == new_inbank
+    assert bnk.media_data(chunks, 444) == other                      # untouched sources keep their data
+    assert [m for m, _o, _s in bnk.didx_entries(chunks)] == [111, 222, 444]
+    assert any("prefetch" in n for n in notes)
+    with pytest.raises(CompileError, match="prefetch data"):
+        bnk.patch_bank(bank, [bnk.SourcePatch(100, 111, V, 1, 1500, codec="vorbis")])
+    pcm_bank = _bank([(bnk.PLUGIN_PCM, 2, 555, 0)], {})
+    with pytest.raises(CompileError, match="not Vorbis"):
+        bnk.patch_bank(pcm_bank, [bnk.SourcePatch(100, 555, None, None, None, codec="vorbis")])
+
+
+def test_rebuild_media_slots_in_a_new_media_id():
+    bank = _bank([(bnk.PLUGIN_VORBIS, 1, 50, 0)], {10: b"a" * 20, 90: b"b" * 20})
+    chunks = bnk.rebuild_media(bnk.parse_chunks(bank), {50: b"c" * 33})
+    assert [(m, s) for m, _o, s in bnk.didx_entries(chunks)] == [(10, 20), (50, 33), (90, 20)]
+    assert bnk.media_data(chunks, 50) == b"c" * 33 and bnk.media_data(chunks, 90) == b"b" * 20
+
+
+# ----------------------------------------------------------- WwiseConsole
+def test_find_console_and_version(tmp_path, monkeypatch):
+    monkeypatch.delenv("CSS_WWISE_CONSOLE", raising=False)
+    root = tmp_path / "Audiokinetic" / "Wwise2023.1.4.8496"
+    exe = root / "Authoring" / "x64" / "Release" / "bin" / "WwiseConsole.exe"
+    exe.parent.mkdir(parents=True)
+    exe.write_bytes(b"MZ")
+    monkeypatch.setenv("WWISEROOT", str(root))
+    assert find_console() == exe and install_name(exe) == "Wwise2023.1.4.8496"
+    chosen = tmp_path / "elsewhere" / "WwiseConsole.exe"
+    chosen.parent.mkdir()
+    chosen.write_bytes(b"MZ")
+    assert find_console(str(chosen)) == chosen
+
+
+def test_encoder_converts_and_checks(paths, tmp_path, monkeypatch):
+    console = install_fake_wwise(tmp_path / "wwise")
+    enc = WwiseEncoder(paths, console)
+    wav_dir = tmp_path / "wav"
+    wav_dir.mkdir()
+    for name, frames in (("1", 48000), ("2", 9600)):
+        wem.write_wav(wav_dir / f"{name}.wav", np.zeros((frames, 2), np.float32), 48000)
+    out = enc.convert([wav_dir / "1.wav", wav_dir / "2.wav"], tmp_path / "work")
+    assert set(out) == {"1", "2"} and wem.read_wem_info(out["1"]).frames == 48000
+    assert enc.project.is_file() and paths.is_inside(enc.project)
+    assert (paths.logs / "wwise_console.log").is_file()
+    monkeypatch.setenv("FAKE_WWISE_PCM", "1")
+    with pytest.raises(WwiseError, match="not to Vorbis"):
+        enc.convert([wav_dir / "1.wav"], tmp_path / "work")
+    monkeypatch.delenv("FAKE_WWISE_PCM")
+    monkeypatch.setenv("FAKE_WWISE_FAIL", "1")
+    with pytest.raises(WwiseError, match="reported an error"):
+        enc.convert([wav_dir / "1.wav"], tmp_path / "work")
+
+
+def test_studio_status_and_test_button(studio, tmp_path, monkeypatch):
+    monkeypatch.delenv("CSS_WWISE_CONSOLE", raising=False)
+    monkeypatch.delenv("WWISEROOT", raising=False)
+    console = install_fake_wwise(tmp_path / "wwise")
+    studio.set_wwise_console(str(console))
+    status = studio.wwise_status()
+    assert status["found"] and status["console"] == str(console) and status["recommended"] == "2023.1"
+    result = studio.test_wwise()
+    assert result["ok"] and result["samples"] == 96000
+    assert json.loads((studio.paths.logs / "wwise_check.json").read_text())["ok"]
+    assert not list(studio.paths.temp.glob("wwise-test-*"))
+    with pytest.raises(WwiseError):
+        studio.set_wwise_console(str(tmp_path / "missing.exe"))
+
+
+# -------------------------------------------------------------- full build
+@pytest.fixture
+def vorbis_built(studio, tmp_path, monkeypatch):
+    game = extract_analyzer_fake_install(tmp_path / "Crimson Desert")
+    studio.import_analyzer(ANALYZER_FAKE_INSTALL_DB)
+    studio.set_game_path(game)
+    music = tmp_path / "Music"
+    write_test_flac(music / "Long Theme.flac", seconds=200, bpm=120, tone_hz=330, tags={"TITLE": "Long Theme"})
+    write_test_flac(music / "Short Motif.flac", seconds=60, bpm=None, tone_hz=110, tags={"TITLE": "Short Motif"})
+    studio.set_library_path(music)
+    studio.scan_library()
+    studio.find_matches()
+    monkeypatch.setenv("CSS_WWISE_CONSOLE", str(install_fake_wwise(tmp_path / "wwise")))
+    return studio, game, music
+
+
+def test_vorbis_build_end_to_end(vorbis_built):
+    studio, game, music = vorbis_built
+    tracks = {t["title"]: t["id"] for t in studio.library_tracks()}
+    store = studio.match_store()
+    store.choose("2001", tracks["Long Theme"])
+    store.choose("2004", tracks["Short Motif"])            # the in-bank transition segment
+    before = fingerprint(game), fingerprint(music)
+    assert studio.build_settings().encoder == "wwise_vorbis"    # the app's default format
+    result = studio.build_mod(BuildSettings(mod_name="Vorbis Mod", encoder="wwise_vorbis"))
+    assert result.validation.ok, result.validation.errors
+    out = result.output_dir / "files" / "0004" / "sound"
+    info = wem.read_wem_info((out / "433831842.wem").read_bytes())
+    assert info.is_vorbis and info.frames == 180 * 48000 and info.channels == 2
+    bank = (out / "bgm.bnk").read_bytes()
+    src = bnk.describe_sources(bank)
+    assert all(r.plugin_id == bnk.PLUGIN_VORBIS for refs in src.values() for r in refs)   # codec unchanged
+    assert src[433831842][0].stream_type == 2 and src[558103][0].stream_type == 0
+    embedded = bnk.media_data(bnk.parse_chunks(bank), 558103)
+    assert wem.read_wem_info(embedded).is_vorbis and src[558103][0].in_memory_size == len(embedded)
+    report = json.loads((result.output_dir / "css_build_report.json").read_text())
+    assert report["codec"] == "vorbis" and report["sources"]["433831842"]["codec"] == "vorbis"
+    assert (fingerprint(game), fingerprint(music)) == before
+    assert not list(studio.paths.temp.glob("build-*"))          # no WAVs or Wwise output left behind
+
+
+def test_vorbis_build_needs_wwise(vorbis_built, monkeypatch):
+    studio, _game, _music = vorbis_built
+    monkeypatch.delenv("CSS_WWISE_CONSOLE")
+    monkeypatch.delenv("WWISEROOT", raising=False)
+    monkeypatch.setattr("soundtrack_studio.compiler.wwise._candidates", lambda: iter(()))
+    tracks = {t["title"]: t["id"] for t in studio.library_tracks()}
+    studio.match_store().choose("2001", tracks["Long Theme"])
+    with pytest.raises(CompileError, match="Wwise is needed"):
+        studio.build_mod(BuildSettings(mod_name="X", encoder="wwise_vorbis"))
+    # PCM still builds without Wwise
+    assert studio.build_mod(BuildSettings(mod_name="Y", encoder="pcm")).validation.ok
+
+
+def test_long_path_prefix_is_removed_for_wwise():
+    from soundtrack_studio.compiler.wwise import _plain
+
+    assert _plain("\\\\?\\C:\\Studio\\temp\\build-1\\wav") == "C:\\Studio\\temp\\build-1\\wav"
+    assert _plain("\\\\?\\UNC\\server\\share\\x") == "\\\\server\\share\\x"
+    assert _plain("C:\\plain") == "C:\\plain"

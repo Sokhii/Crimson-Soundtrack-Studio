@@ -103,6 +103,24 @@ leave a codec mismatch and stale prefetch data (this is why a WEM-only replaceme
 several GB. ADPCM would be about 4x smaller but its exact Wwise block layout for this engine version is
 not yet verified, so it is not used.
 
+## 4b. What working community music mods do (2026-10-01)
+
+Evidence from three mods a user supplied (headers and soundbanks only; no audio kept): Crimson Tamriel V1 and V2
+(April/May 2026, before game update 2.0) and Way To Valhalla V3.0 (2026-09-28, states "Update 2.3 compatible").
+
+| Fact | Source | Trust |
+|---|---|---|
+| Every replacement `.wem` is Wwise Vorbis: format tag 0xFFFF, `fmt ` 0x42 bytes, 48 kHz stereo, about 14-19 kB/s; sample count at `fmt+0x18`, setup/audio offsets (relative to `data`) at `fmt+0x28`/`fmt+0x2C`. | headers of 13 files from the three mods | verified |
+| Their banks keep the Vorbis plugin and prefetch streaming (StreamType 1); no source is switched to PCM and no prefetch data is removed. | `412724365.bnk` of Tamriel V1 vs the Studio's; `925595748.bnk` of WTV | verified |
+| A prefetch copy in the bank is a byte prefix of the streamed `.wem` (compared byte for byte, 3 of 3); its length varies (948-5066 bytes) and can end inside the setup data; the in-memory size field equals its length. | Tamriel V1 bank + file headers | verified |
+| WTV was authored with Wwise projects and patched with a custom bank tool; it also raises in-bank Volume properties (818 fields, many by +9 dB) and changes some track lengths. | WTV `BUILD_REPORT.txt`, `DIRECT_LAYOUT_MASTER_REPORT.txt`, `CREDITS_BUILD_DETAILS.txt` | verified (author's report) |
+| A PCM build by the Studio (0.12, 418 cues) applied without errors in DMM but played no music; removing its banks did not help. | user test | verified (one setup) |
+
+**Decision (0.13).** Default to Wwise Vorbis made by the user's Wwise (`WwiseConsole convert-external-source`
+with "Vorbis Quality High"), keep codec/storage/flags in the banks and replace only media (section 4 above
+describes the earlier PCM approach, still available as an option). Wwise is proprietary and is neither bundled nor
+reimplemented. Not yet done: matching WTV's in-bank volume changes.
+
 ## 5. Unknown / not verified in game
 
 - In-game playback of the Studio's output has **not** been tested (no game in the development

@@ -14,6 +14,7 @@ Crimson Soundtrack Studio is MIT-licensed (see `LICENSE`). The portable build bu
 | [llama.cpp](https://github.com/ggml-org/llama.cpp) (`runtime/llama/`) | MIT | local AI runtime (separate program) |
 | [ONNX Runtime](https://onnxruntime.ai/) (DirectML build on Windows, incl. `DirectML.dll`) | MIT | optional listening model |
 | [tokenizers](https://github.com/huggingface/tokenizers) | Apache-2.0 | listening model text prompts |
+| [Wwise](https://www.audiokinetic.com/) (Audiokinetic) | proprietary; free for non-commercial use under Audiokinetic's licence | **not bundled.** Installed by the user with the Audiokinetic Launcher; the Studio only runs its `WwiseConsole.exe` to convert music to Wwise Vorbis |
 | [vgmstream](https://github.com/vgmstream/vgmstream) (`runtime/vgmstream/`) | ISC-style; its bundled decoder libraries under their own licences (libvorbis/libogg: BSD; mpg123, FFmpeg: LGPL, as separate DLLs) | decodes the game's Wwise audio for the read-only game-audio analysis (separate program) |
 
 No GPL-licensed code is bundled (LGPL libraries are shipped as separate, replaceable shared libraries). FLAC metadata is read by the Studio's own parser

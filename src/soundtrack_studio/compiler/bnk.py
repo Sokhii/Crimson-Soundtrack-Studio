@@ -152,8 +152,10 @@ def rebuild_media(chunks: List[Chunk], changes: Dict[int, Optional[bytes]]) -> L
     """Return new chunks with DIDX/DATA updated: media id -> new bytes, or None to remove."""
 
     entries = didx_entries(chunks)
+    known = {mid for mid, _o, _s in entries}
+    added = sorted(mid for mid, blob in changes.items() if blob is not None and mid not in known)
     if not entries:
-        if any(v is not None for v in changes.values()):
+        if added:
             raise CompileError("The soundbank has no media section to hold embedded audio.")
         return chunks
     data_chunk = next((c for c in chunks if c.tag == b"DATA"), None)
@@ -162,8 +164,11 @@ def rebuild_media(chunks: List[Chunk], changes: Dict[int, Optional[bytes]]) -> L
     align = 16 if all(off % 16 == 0 for _m, off, _s in entries) else 1
     new_index = bytearray()
     new_data = bytearray()
-    for mid, off, size in entries:
-        if off + size > len(data_chunk.payload):
+    # media ids stay in ascending order (as Wwise writes them); a media id new to this bank is slotted in
+    order = sorted([(mid, off, size) for mid, off, size in entries] + [(mid, -1, 0) for mid in added],
+                   key=lambda e: e[0]) if added else entries
+    for mid, off, size in order:
+        if off >= 0 and off + size > len(data_chunk.payload):
             raise CompileError("The soundbank's media index points outside its data.", details=f"media {mid}")
         blob = changes[mid] if mid in changes else data_chunk.payload[off:off + size]
         if blob is None:
@@ -192,11 +197,19 @@ class SourcePatch:
     expected_plugin: Optional[int]      # from the Analyzer; None = do not check
     expected_stream: Optional[int]
     expected_in_memory: Optional[int]
-    embedded_data: Optional[bytes] = None   # PCM WEM bytes when the source stays inside the bank
+    embedded_data: Optional[bytes] = None   # WEM bytes when the source stays inside the bank
+    codec: str = "pcm"                      # pcm: switch the source to PCM | vorbis: keep the game's Vorbis codec
+    prefetch_data: Optional[bytes] = None   # vorbis + prefetch-streamed: the new in-bank copy (prefix of the .wem)
 
 
 def patch_bank(bank: bytes, patches: List[SourcePatch]) -> Tuple[bytes, List[str]]:
-    """Switch the listed sources to PCM (streamed, or in-bank when ``embedded_data`` is given)."""
+    """Point the listed sources at the replacement audio.
+
+    ``codec="pcm"``: switch them to PCM (streamed, or in-bank when ``embedded_data`` is given).
+    ``codec="vorbis"`` (the replacement is Wwise Vorbis, like the game's own media and every working community mod):
+    codec, storage type and flags stay as the game shipped them; only the media changes - the in-bank copy of an
+    in-bank source (``embedded_data``), or the prefetch copy of a prefetch-streamed source (``prefetch_data``, which
+    must be the beginning of the new streamed file). Plain streamed sources need no bank change at all."""
 
     chunks = parse_chunks(bank)
     version = bank_version(chunks)
@@ -225,12 +238,16 @@ def patch_bank(bank: bytes, patches: List[SourcePatch]) -> Tuple[bytes, List[str
             if p.expected_in_memory is not None and ref.in_memory_size != p.expected_in_memory:
                 raise CompileError("A music source's size differs from the Analyzer database.",
                                    details=f"source {p.source_id}: bank {ref.in_memory_size}, database {p.expected_in_memory}")
-            if p.embedded_data is not None:
+            if p.codec == "vorbis":
+                _patch_vorbis(buf, ref, p, media_changes, notes)
+            elif p.embedded_data is not None:
                 SOURCE_STRUCT.pack_into(buf, ref.offset, PLUGIN_PCM, STREAM_IN_BANK, ref.source_id,
                                         len(p.embedded_data), ref.bits & ~BIT_PREFETCH & 0xFF)
             else:
                 SOURCE_STRUCT.pack_into(buf, ref.offset, PLUGIN_PCM, STREAM_STREAMING, ref.source_id, 0,
                                         ref.bits & ~BIT_PREFETCH & 0xFF)
+        if p.codec == "vorbis":
+            continue
         if p.embedded_data is not None:
             if p.source_id not in present:
                 raise CompileError("An in-bank music source has no data in the soundbank.", details=str(p.source_id))
@@ -240,6 +257,29 @@ def patch_bank(bank: bytes, patches: List[SourcePatch]) -> Tuple[bytes, List[str
             notes.append(f"removed prefetch data of source {p.source_id}")
     patched_chunks = rebuild_media(parse_chunks(bytes(buf)), media_changes)
     return write_chunks(patched_chunks), notes
+
+
+def _patch_vorbis(buf: bytearray, ref: SourceRef, p: SourcePatch, media_changes: Dict[int, Optional[bytes]],
+                  notes: List[str]) -> None:
+    if ref.plugin_id != PLUGIN_VORBIS:
+        raise CompileError("A music source is not Vorbis in the game's soundbank, so a Vorbis replacement cannot be "
+                           "used for it.", details=f"source {p.source_id}: 0x{ref.plugin_id:08x}")
+    if ref.stream_type == STREAM_IN_BANK:
+        if p.embedded_data is None:
+            raise CompileError("An in-bank music source needs its replacement audio.", details=str(p.source_id))
+        data = p.embedded_data
+    elif ref.stream_type == STREAM_PREFETCH:
+        if p.prefetch_data is None:
+            raise CompileError("A prefetch-streamed music source needs its prefetch data.", details=str(p.source_id))
+        data = p.prefetch_data
+    else:
+        return                                   # plain streaming: the bank only refers to the .wem file
+    SOURCE_STRUCT.pack_into(buf, ref.offset, ref.plugin_id, ref.stream_type, ref.source_id, len(data), ref.bits)
+    if media_changes.get(p.source_id, data) != data:
+        raise CompileError("Two different replacements for the same in-bank media.", details=str(p.source_id))
+    media_changes[p.source_id] = data
+    notes.append(f"{'embedded' if ref.stream_type == STREAM_IN_BANK else 'prefetch'} data of source {p.source_id}: "
+                 f"{len(data)} bytes")
 
 
 def describe_sources(bank: bytes) -> Dict[int, List[SourceRef]]:

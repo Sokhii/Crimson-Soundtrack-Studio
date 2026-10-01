@@ -37,6 +37,9 @@ class Settings:
     listening_device: str = "auto"            # auto (GPU when available) | cpu
     matching_mode: str = "standout"           # "standout" = compare standout scores | "legacy" = tag matching
     approve_levels: List[str] = field(default_factory=lambda: ["high"])   # confidence levels the Approve button accepts
+    build_encoder: str = "wwise_vorbis"       # audio format of built mods: wwise_vorbis (needs Wwise) | pcm
+    wwise_console_path: str = ""              # WwiseConsole.exe; empty = find it (WWISEROOT, Program Files)
+    wwise_conversion: str = "Vorbis Quality High"   # Wwise conversion setting used for the music
     max_uses_per_track: int = 0               # most cues one track may be proposed for (0 = automatic)
     window_geometry: str = ""                 # hex-encoded QByteArray
     extra: Dict[str, Any] = field(default_factory=dict)

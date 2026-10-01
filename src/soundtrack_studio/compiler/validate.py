@@ -86,6 +86,7 @@ def validate_output(mod_dir: Path, expected: Dict[str, Any]) -> ValidationResult
             _check_wem(result, rel, info, spec)
 
     for sid, spec in sources.items():
+        vorbis = spec.get("codec") == "vorbis"
         for bank_rel in spec.get("banks", []):
             data = banks.get(bank_rel)
             if data is None:
@@ -94,6 +95,11 @@ def validate_output(mod_dir: Path, expected: Dict[str, Any]) -> ValidationResult
             if not refs:
                 result.error(f"{bank_rel}: source {sid} not found after patching")
                 continue
+            chunks = bnk.parse_chunks(data)
+            embedded = bnk.media_data(chunks, sid)
+            if vorbis:
+                _check_vorbis_bank(result, bank_rel, sid, refs, embedded, spec, files_dir)
+                continue
             for ref in refs:
                 if ref.plugin_id != bnk.PLUGIN_PCM:
                     result.error(f"{bank_rel}: source {sid} is not PCM (0x{ref.plugin_id:08x})")
@@ -101,8 +107,6 @@ def validate_output(mod_dir: Path, expected: Dict[str, Any]) -> ValidationResult
                     result.error(f"{bank_rel}: source {sid} storage {ref.stream_type}, expected {spec['stream_type']}")
                 if ref.bits & bnk.BIT_PREFETCH:
                     result.error(f"{bank_rel}: source {sid} still marked as prefetch")
-            chunks = bnk.parse_chunks(data)
-            embedded = bnk.media_data(chunks, sid)
             if spec["stream_type"] == 0:
                 if embedded is None:
                     result.error(f"{bank_rel}: in-bank source {sid} has no data")
@@ -118,7 +122,42 @@ def validate_output(mod_dir: Path, expected: Dict[str, Any]) -> ValidationResult
     return result
 
 
+def _check_vorbis_bank(result: ValidationResult, bank_rel: str, sid: int, refs, embedded: bytes, spec: Dict[str, Any],
+                       files_dir: Path) -> None:
+    """Vorbis builds keep the game's codec and storage; the in-bank copy must be the new file (or its beginning)."""
+
+    streamed = None
+    if spec.get("file"):
+        try:
+            streamed = (files_dir / spec["file"]).read_bytes()
+        except OSError:
+            streamed = None
+    for ref in refs:
+        if ref.plugin_id != bnk.PLUGIN_VORBIS:
+            result.error(f"{bank_rel}: source {sid} is not Vorbis (0x{ref.plugin_id:08x})")
+        if ref.stream_type == bnk.STREAM_STREAMING:
+            continue
+        if embedded is None:
+            result.error(f"{bank_rel}: source {sid} has no {'prefetch ' if ref.stream_type else ''}data in the bank")
+            continue
+        if ref.in_memory_size != len(embedded):
+            result.error(f"{bank_rel}: source {sid} size field does not match its data")
+        if ref.stream_type == bnk.STREAM_IN_BANK:
+            try:
+                _check_wem(result, f"{bank_rel}#{sid}", wem.read_wem_info(embedded), spec)
+            except CompileError as exc:
+                result.error(f"{bank_rel}#{sid}: {exc.message}")
+        elif streamed is not None and not streamed.startswith(embedded):
+            result.error(f"{bank_rel}: prefetch data of source {sid} is not the beginning of {spec['file']}")
+
+
+VORBIS_LENGTH_TOLERANCE = 2048      # samples; one Vorbis long block
+
+
 def _check_wem(result: ValidationResult, rel: str, info: wem.WemInfo, spec: Dict[str, Any]) -> None:
+    if spec.get("codec") == "vorbis":
+        _check_vorbis_wem(result, rel, info, spec)
+        return
     if info.format_tag != wem.FORMAT_WWISE_PCM or info.bits_per_sample != 16:
         result.error(f"{rel}: not 16-bit Wwise PCM")
     if info.sample_rate != 48000:
@@ -128,3 +167,18 @@ def _check_wem(result: ValidationResult, rel: str, info: wem.WemInfo, spec: Dict
             result.error(f"{rel}: {info.channels} channels, expected {spec['channels']}")
         if info.frames != spec["frames"]:
             result.error(f"{rel}: {info.frames} samples, expected {spec['frames']} (the segment timing would change)")
+
+
+def _check_vorbis_wem(result: ValidationResult, rel: str, info: wem.WemInfo, spec: Dict[str, Any]) -> None:
+    if not info.is_vorbis:
+        result.error(f"{rel}: not Wwise Vorbis (format 0x{info.format_tag:04X})")
+        return
+    if info.sample_rate != 48000:
+        result.error(f"{rel}: sample rate {info.sample_rate}")
+    if info.channels != spec.get("channels", info.channels):
+        result.error(f"{rel}: {info.channels} channels, expected {spec['channels']}")
+    expected = spec.get("frames")
+    if expected is not None and abs(info.frames - expected) > VORBIS_LENGTH_TOLERANCE:
+        result.error(f"{rel}: {info.frames} samples, expected {expected} (the segment timing would change)")
+    elif expected is not None and info.frames != expected:
+        result.warnings.append(f"{rel}: {info.frames} samples instead of {expected} (within one Vorbis block)")

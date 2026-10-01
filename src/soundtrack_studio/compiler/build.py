@@ -1,7 +1,8 @@
 """Mod build pipeline.
 
     accepted mapping ─► plan ─► render user audio onto each segment timeline
-        ─► PCM .wem per source (music slice or silence)
+        ─► .wem per source (music slice or silence): Wwise Vorbis made by the user's Wwise
+           (encoder "wwise_vorbis", like every working community mod), or PCM (encoder "pcm")
         ─► read + verify original banks (read-only) ─► patch sources, rebuild DIDX/DATA
         ─► write package into a workspace ─► independent validation
         ─► move to output/<mod name>/ (+ optional .zip)
@@ -52,6 +53,11 @@ class BuildSettings:
     normalize: bool = True
     target_rms_dbfs: float = -18.0
     make_zip: bool = True
+    encoder: str = "pcm"                 # wwise_vorbis (needs Wwise) | pcm (no extra software; not proven in game)
+
+
+ENCODERS = ("wwise_vorbis", "pcm")
+WWISE_BATCH = 24                         # sources per Wwise run (each run has a start-up cost; WAVs are large)
 
 
 @dataclass
@@ -81,8 +87,9 @@ def _game_fingerprint(game_root: Path, rel_paths: List[str]) -> Dict[str, Any]:
 
 class ModBuilder:
     def __init__(self, paths: AppPaths, game_root: Path, analyzer_conn, installation_id: int, model: GameMusicModel,
-                 track_paths: Dict[int, Path], settings: BuildSettings) -> None:
+                 track_paths: Dict[int, Path], settings: BuildSettings, wwise=None) -> None:
         self.paths = paths
+        self.wwise = wwise                # compiler.wwise.WwiseEncoder for encoder "wwise_vorbis"
         self.game_root = Path(game_root)
         self.conn = analyzer_conn
         self.installation_id = installation_id
@@ -97,6 +104,9 @@ class ModBuilder:
         report_progress = progress or (lambda *a: None)
         if self.settings.layout not in LAYOUTS:
             raise CompileError("Unknown package layout.", details=self.settings.layout)
+        if self.settings.encoder not in ENCODERS:
+            raise CompileError("Unknown audio format.", details=self.settings.encoder)
+        vorbis = self.settings.encoder == "wwise_vorbis"
         if not mapping:
             raise CompileError("No replacements are confirmed yet.",
                                hint="Accept or choose tracks on the Matching page first.")
@@ -105,6 +115,9 @@ class ModBuilder:
             if path is None or not is_file(path):
                 raise CompileError("A chosen music file is missing.", hint="Rescan the music library or choose "
                                    "another track.", details=str(path or entry.track_id))
+        if vorbis and self.wwise is None:
+            raise CompileError("Wwise is needed to build in the Vorbis format, and it was not found.",
+                               hint="Install Wwise (Build page, 'Get Wwise') or choose the PCM format.")
 
         report_progress("Planning the build", 0, 0)
         plan = build_plan(self.model, self.conn, self.installation_id, mapping)
@@ -127,6 +140,18 @@ class ModBuilder:
         sources_report: Dict[str, Any] = {}
         cue_report: Dict[str, Any] = {}
         embedded: Dict[int, bytes] = {}
+        prefetch: Dict[int, bytes] = {}
+        pending: List[Any] = []
+        total_jobs = len(plan.jobs)
+        converted = [0]
+
+        def flush() -> None:
+            report_progress("Converting with Wwise", converted[0], total_jobs)
+            self._convert_pending(pending, work, files_root, written, sources_report, embedded, prefetch)
+            converted[0] += len(pending)
+            pending.clear()
+            report_progress("Converting with Wwise", converted[0], total_jobs)
+
         try:
             # 1. one cue at a time: render its timeline, write its sources, release the audio
             #    (a full soundtrack would not fit in memory if all timelines were kept)
@@ -149,8 +174,18 @@ class ModBuilder:
                                            "duration_s": plan.cue_durations[cue_key], "decided_by": entry.decided_by,
                                            **info}
                 for job in jobs_by_cue[cue_key]:
-                    self._write_source(job, timeline, files_root, written, sources_report, embedded)
+                    if vorbis:
+                        self._queue_source(job, timeline, work, sources_report)
+                        pending.append(job)
+                    else:
+                        self._write_source(job, timeline, files_root, written, sources_report, embedded)
                 del timeline
+                if vorbis and len(pending) >= WWISE_BATCH:
+                    if cancel and cancel():
+                        raise OperationCancelled()
+                    flush()
+            if pending:
+                flush()
 
             # 2. patch every affected bank (read-only access to the game)
             banks = plan.banks()
@@ -165,7 +200,9 @@ class ModBuilder:
                         if use.bank_asset_id == asset_id:
                             patches.append(bnk.SourcePatch(use.object_id, job.source_id, use.plugin_id, use.stream_type,
                                                            use.in_memory_size if use.stream_type else None,
-                                                           embedded.get(job.source_id)))
+                                                           embedded.get(job.source_id),
+                                                           codec="vorbis" if vorbis else "pcm",
+                                                           prefetch_data=prefetch.get(job.source_id)))
                 patched, notes = bnk.patch_bank(original, patches)
                 rel = f"{self._package(vpath)}/{vpath}"
                 target = files_root / rel
@@ -177,7 +214,7 @@ class ModBuilder:
             # 3. manifest, readme, report
             report = {
                 "generator": f"Crimson Soundtrack Studio {__version__}", "format": "css-build-report", "version": 1,
-                "mod_name": mod_name, "layout": self.settings.layout,
+                "mod_name": mod_name, "layout": self.settings.layout, "codec": "vorbis" if vorbis else "pcm",
                 "files_dir": "files" if self.settings.layout == "crimson_browser" else ".",
                 "files": sorted(written), "sources": sources_report, "cues": cue_report,
                 "analyzer_installation": self.installation_id, "warnings": plan.warnings,
@@ -224,20 +261,26 @@ class ModBuilder:
         finally:
             shutil.rmtree(work, ignore_errors=True)
 
-    def _write_source(self, job, timeline: Optional[np.ndarray], files_root: Path, written: List[str],
-                      sources_report: Dict[str, Any], embedded: Dict[int, bytes]) -> None:
+    @staticmethod
+    def _piece(job, timeline: Optional[np.ndarray]) -> np.ndarray:
         start, frames = timeline_slice_frames(job, TARGET_RATE)
         if job.role == "music" and timeline is not None:
             piece = slice_timeline(timeline, start, frames)
             if piece.shape[1] != job.channels:
                 piece = map_channels(piece, job.channels)
-        else:
-            piece = np.zeros((frames, job.channels), np.float32)
-        data = wem.build_pcm_wem(piece, TARGET_RATE)
+            return piece
+        return np.zeros((frames, job.channels), np.float32)
+
+    def _report_source(self, job, frames: int, sources_report: Dict[str, Any], codec: str) -> Dict[str, Any]:
         bank_rels = sorted({f"{self._package(u.bank_vpath)}/{u.bank_vpath}" for u in job.uses})
-        sources_report[str(job.source_id)] = {
-            "cue": job.cue_key, "role": job.role, "stream_type": job.stream_type, "frames": frames,
-            "channels": job.channels, "banks": bank_rels, "play_at_s": job.play_at_s}
+        entry = {"cue": job.cue_key, "role": job.role, "stream_type": job.stream_type, "frames": frames,
+                 "channels": job.channels, "banks": bank_rels, "play_at_s": job.play_at_s, "codec": codec,
+                 "bank_stream_types": sorted({u.stream_type for u in job.uses})}
+        sources_report[str(job.source_id)] = entry
+        return entry
+
+    def _place(self, job, data: bytes, files_root: Path, written: List[str], entry: Dict[str, Any],
+               embedded: Dict[int, bytes]) -> None:
         if job.stream_type == 0:
             embedded[job.source_id] = data
             return
@@ -246,7 +289,50 @@ class ModBuilder:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(data)
         written.append(rel)
-        sources_report[str(job.source_id)]["file"] = rel
+        entry["file"] = rel
+
+    def _write_source(self, job, timeline: Optional[np.ndarray], files_root: Path, written: List[str],
+                      sources_report: Dict[str, Any], embedded: Dict[int, bytes]) -> None:
+        piece = self._piece(job, timeline)
+        data = wem.build_pcm_wem(piece, TARGET_RATE)
+        entry = self._report_source(job, len(piece), sources_report, "pcm")
+        self._place(job, data, files_root, written, entry, embedded)
+
+    def _queue_source(self, job, timeline: Optional[np.ndarray], work: Path, sources_report: Dict[str, Any]) -> None:
+        """Vorbis: write the source's audio as a .wav for the next Wwise run."""
+
+        piece = self._piece(job, timeline)
+        wav_dir = work / "wav"
+        wav_dir.mkdir(exist_ok=True)
+        wem.write_wav(wav_dir / f"{job.source_id}.wav", piece, TARGET_RATE)
+        self._report_source(job, len(piece), sources_report, "vorbis")
+
+    def _convert_pending(self, jobs: List[Any], work: Path, files_root: Path, written: List[str],
+                         sources_report: Dict[str, Any], embedded: Dict[int, bytes], prefetch: Dict[int, bytes]) -> None:
+        if not jobs:
+            return
+        wav_dir = work / "wav"
+        wavs = [wav_dir / f"{job.source_id}.wav" for job in jobs]
+        try:
+            results = self.wwise.convert(wavs, work / "wwise")
+        finally:
+            for w in wavs:
+                w.unlink(missing_ok=True)
+        for job in jobs:
+            data = results[str(job.source_id)]
+            info = wem.read_wem_info(data)
+            entry = sources_report[str(job.source_id)]
+            if info.channels != job.channels or info.sample_rate != TARGET_RATE:
+                raise CompileError("Wwise changed the channel count or sample rate of the music.",
+                                   hint="Use a Vorbis conversion setting without channel or rate changes.",
+                                   details=f"source {job.source_id}: {info.channels} ch {info.sample_rate} Hz, "
+                                           f"expected {job.channels} ch {TARGET_RATE} Hz")
+            entry["samples"] = info.samples
+            entry["bytes"] = len(data)
+            self._place(job, data, files_root, written, entry, embedded)
+            if job.stream_type != 0:
+                prefetch[job.source_id] = wem.prefetch_prefix(data)
+                entry["prefetch_bytes"] = len(prefetch[job.source_id])
 
     def _package(self, vpath: str) -> str:
         package = self.reader.package_for_vpath(vpath, self.installation_id)
