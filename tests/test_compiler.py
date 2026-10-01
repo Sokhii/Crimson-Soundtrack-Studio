@@ -291,3 +291,40 @@ def test_slice_timeline_handles_clips_that_start_before_or_run_past_the_segment(
     assert audio.slice_timeline(timeline, 90, 30)[9, 0] == 100 and not audio.slice_timeline(timeline, 90, 30)[10:].any()
     assert not audio.slice_timeline(timeline, 500, 10).any()
     assert not audio.slice_timeline(timeline, -50, 20).any()
+
+
+def test_build_works_through_the_long_path_prefix(built, monkeypatch):
+    """The work and output folders are opened via os_path(force=True) (the app folder may be deep; mod paths long)."""
+
+    from soundtrack_studio.compiler import build as build_module
+
+    studio, _game, _music = built
+    studio.match_store().accept_all()
+    seen = []
+
+    def record(path, **kwargs):
+        seen.append((str(path), kwargs.get("force", False)))
+        return str(path)
+
+    monkeypatch.setattr(build_module, "os_path", record)
+    result = studio.build_mod(BuildSettings(mod_name="Long Paths"))
+    forced = [p for p, force in seen if force]
+    assert any("build-" in p for p in forced) and any(p.endswith("Long Paths") for p in forced)
+    assert result.output_dir == studio.paths.output / "Long Paths"         # shown without the prefix
+
+
+@pytest.mark.skipif(os.name != "nt", reason="the 260-character limit only exists on Windows")
+def test_long_paths_can_be_created_written_listed_and_removed_on_windows(tmp_path):
+    import shutil
+
+    from soundtrack_studio.app_paths import os_path
+
+    deep = tmp_path / ("a" * 60) / ("b" * 60) / ("c" * 60) / ("d" * 60) / "files" / "0004" / "sound" / "windows" / "media"
+    assert len(str(deep)) > 260
+    base = Path(os_path(tmp_path / "long-build", force=True))
+    target = base / ("x" * 60) / ("y" * 60) / ("z" * 60) / ("w" * 60) / "files" / "0004" / "sound" / "windows" / "media"
+    target.mkdir(parents=True)
+    (target / "1.wem").write_bytes(b"data")
+    assert [p.name for p in base.rglob("*.wem")] == ["1.wem"]
+    shutil.rmtree(base)
+    assert not base.exists()

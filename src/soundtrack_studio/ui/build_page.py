@@ -10,6 +10,7 @@ from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout, QHBoxLayout, QHeaderView, QLabel,
                                QLineEdit, QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
+from ..app_paths import is_file, os_path
 from ..compiler.build import BuildSettings
 from .widgets import Card, esc, fmt_bytes
 
@@ -158,6 +159,6 @@ class BuildPage(QWidget):
     def show_report(self) -> None:
         row = self.history.currentRow()
         build = self.builds[row] if 0 <= row < len(self.builds) else (self.builds[0] if self.builds else None)
-        if build and build["output_dir"] and Path(build["output_dir"]).is_dir():
+        if build and build["output_dir"] and Path(os_path(build["output_dir"])).is_dir():
             report = Path(build["output_dir"]) / "build_report.json"
-            QDesktopServices.openUrl(QUrl.fromLocalFile(str(report if report.is_file() else build["output_dir"])))
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(report if is_file(report) else build["output_dir"])))

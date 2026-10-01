@@ -22,7 +22,7 @@ from .ai.runtime import InferenceBackend, LlamaServerBackend, find_llama_server,
 from .analyzer_db import compat
 from .analyzer_db.importer import ImportedDatabase, import_database, load_imported, source_changed
 from .analyzer_db.reader import AnalyzerReader
-from .app_paths import AppPaths
+from .app_paths import AppPaths, os_path
 from .config import Settings
 from .errors import AnalyzerDbError, GameInstallError, LibraryError, ProjectError
 from .game_model.builder import load_or_build
@@ -1013,7 +1013,8 @@ class Studio:
             conn.close()
         summary = {"cues": len(result.report["cues"]), "files": len(result.report["files"]),
                    "warnings": result.warnings, "validation": asdict(result.validation),
-                   "size_bytes": sum(p.stat().st_size for p in result.output_dir.rglob("*") if p.is_file())}
+                   "size_bytes": sum(p.stat().st_size for p in Path(os_path(result.output_dir, force=True)).rglob("*")
+                                     if p.is_file())}
         project.execute("UPDATE build SET status='completed', finished_at=?, output_path=?, zip_path=?, summary_json=?"
                         " WHERE id=?", (now_iso(), self.paths.to_stored(result.output_dir),
                                         self.paths.to_stored(result.zip_path) if result.zip_path else None,

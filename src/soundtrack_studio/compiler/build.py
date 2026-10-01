@@ -27,7 +27,7 @@ from typing import Any, Callable, Dict, List, Optional
 import numpy as np
 
 from .. import __version__
-from ..app_paths import AppPaths, is_file
+from ..app_paths import AppPaths, is_file, os_path
 from ..errors import OperationCancelled
 from ..game_model.model import GameMusicModel
 from ..matching.store import MappingEntry
@@ -115,7 +115,10 @@ class ModBuilder:
                      for a in plan.banks() if self.reader.entry_for_asset(a)["origin"] == "archive"]
         game_before = _game_fingerprint(self.game_root, paz_paths)
 
-        work = self.paths.temp / f"build-{uuid.uuid4().hex[:10]}"
+        # The work folder sits inside the app folder, which may itself be deep in the user's folders; a mod's file paths
+        # (files/0004/sound/windows/media/...) then pass Windows' 260-character limit. Everything below derives from a
+        # path with the extended-length prefix, which lifts that limit.
+        work = Path(os_path(self.paths.temp / f"build-{uuid.uuid4().hex[:10]}", force=True))
         mod_name = safe_name(self.settings.mod_name)
         mod_dir = work / mod_name
         files_root = mod_dir / "files" if self.settings.layout == "crimson_browser" else mod_dir
@@ -202,9 +205,10 @@ class ModBuilder:
                 raise CompileError("The built mod failed validation and was not saved.",
                                    details="\n".join(validation.errors[:20]))
             self.paths.output.mkdir(parents=True, exist_ok=True)
-            final = self.paths.output / mod_name
+            shown = self.paths.output / mod_name
+            final = Path(os_path(shown, force=True))
             if final.exists():
-                backup = self.paths.output / f"{mod_name}.previous"
+                backup = Path(os_path(self.paths.output / f"{mod_name}.previous", force=True))
                 shutil.rmtree(backup, ignore_errors=True)
                 final.replace(backup)
             shutil.move(str(mod_dir), str(final))
@@ -216,7 +220,7 @@ class ModBuilder:
                     for path in sorted(final.rglob("*")):
                         if path.is_file():
                             zf.write(path, f"{mod_name}/{path.relative_to(final).as_posix()}")
-            return BuildResult(final, zip_path, report, validation, plan.warnings)
+            return BuildResult(shown, zip_path, report, validation, plan.warnings)
         finally:
             shutil.rmtree(work, ignore_errors=True)
 
