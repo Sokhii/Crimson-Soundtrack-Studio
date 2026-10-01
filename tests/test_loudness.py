@@ -164,3 +164,77 @@ def test_projects_saved_before_loudness_modes(studio, tmp_path):
     assert studio.build_settings().loudness_mode == "off"
     studio.require_project().set("build_settings", {"mod_name": "X", "normalize": True})
     assert studio.build_settings().loudness_mode == "match"
+
+
+def _drop_loudness_from_cache(studio):
+    """Make the stored game measurements look like ones made before 0.14 (no loudness_lufs)."""
+
+    with studio._game_audio() as analyzer:
+        for sid in studio.game_music_sources():
+            loc = analyzer.locate(sid)
+            m = analyzer.cache.get_measure(loc.key) if loc and loc.key else None
+            if m and m["status"] == "ok":
+                features = dict(m["features"])
+                features.pop("loudness_lufs", None)
+                analyzer.cache.put_measure(loc.key, "ok", features, decoded_s=m["decoded_s"])
+
+
+def test_analysing_again_adds_loudness_to_old_measurements(loud_built, monkeypatch):
+    studio = loud_built
+    _drop_loudness_from_cache(studio)
+    assert all("loudness_lufs" not in r.features for r in studio.game_audio_results().values() if r.status == "ok")
+    refs = studio.loudness_references(studio.game_model(), studio.match_store().final_mapping())
+    assert refs["2001"]["lufs"] is None and refs["2001"]["rms"] is not None          # only the old level
+    studio.analyze_game_audio()                                                     # the user's "scan again"
+    measured = [r.features.get("loudness_lufs") for r in studio.game_audio_results().values() if r.status == "ok"]
+    assert measured and all(m is not None for m in measured)
+    # a second run has nothing left to re-measure (no decoding at all)
+    from soundtrack_studio.gameaudio import analysis
+
+    calls = []
+    monkeypatch.setattr(analysis, "decode", lambda *a, **k: calls.append(a))
+    studio.analyze_game_audio()
+    assert calls == []
+
+
+def test_failed_remeasure_keeps_the_old_measurement(loud_built, monkeypatch):
+    from soundtrack_studio.gameaudio import analysis
+    from soundtrack_studio.gameaudio.decoder import DecodeError
+
+    studio = loud_built
+    _drop_loudness_from_cache(studio)
+
+    def broken(*_a, **_k):
+        raise DecodeError("vgmstream could not decode this game audio file.", details="test")
+
+    monkeypatch.setattr(analysis, "decode", broken)
+    studio.analyze_game_audio()
+    results = [r for r in studio.game_audio_results().values() if r.features]
+    assert results and all(r.status == "ok" and r.features.get("rms_dbfs") is not None for r in results)
+
+
+def test_match_never_aims_far_below_the_target(loud_built, monkeypatch):
+    from soundtrack_studio.compiler.build import BuildSettings
+
+    studio = loud_built
+    monkeypatch.setattr(studio, "loudness_references", lambda model, mapping: {"2001": {"lufs": -60.0, "rms": None}})
+    result = studio.build_mod(BuildSettings(mod_name="Floor", loudness_mode="match", target_lufs=-16.0,
+                                            match_floor_db=6.0, make_zip=False))
+    cue = result.report["cues"]["2001"]
+    assert cue["raised_to_floor"] and cue["loudness_target_lufs"] == -22.0
+    summary = result.report["loudness"]
+    assert summary["raised_to_floor"] == 1 and summary["floor_lufs"] == -22.0
+    # an original inside the band is matched as measured
+    monkeypatch.setattr(studio, "loudness_references", lambda model, mapping: {"2001": {"lufs": -19.0, "rms": None}})
+    inside = studio.build_mod(BuildSettings(mod_name="Inside", loudness_mode="match", target_lufs=-16.0,
+                                            match_floor_db=6.0, make_zip=False))
+    assert inside.report["cues"]["2001"]["loudness_target_lufs"] == -19.0
+    assert "raised_to_floor" not in inside.report["cues"]["2001"]
+
+
+def test_build_message_explains_floor_and_estimates():
+    from soundtrack_studio.ui.build_page import loudness_text
+
+    text = loudness_text({"mode": "match", "cues": 10, "reached_target": 8, "below_target": 2, "most_below_db": 3.0,
+                          "raised_to_floor": 4, "floor_lufs": -22.0, "estimated": 5})
+    assert "raised to -22 LUFS" in text and "5 originals" in text and "Analyse game audio" in text

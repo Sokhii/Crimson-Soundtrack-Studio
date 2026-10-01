@@ -42,6 +42,12 @@ def loudness_text(summary) -> str:
     if summary.get("below_target"):
         text += (f" {summary['below_target']} stay up to {summary['most_below_db']:g} dB quieter so their peaks do "
                  "not distort.")
+    if summary.get("raised_to_floor"):
+        text += (f" {summary['raised_to_floor']} originals measured very quiet; those were raised to "
+                 f"{summary['floor_lufs']:g} LUFS.")
+    if summary.get("estimated"):
+        text += (f"\n{summary['estimated']} originals only had an older level measurement, so their loudness was "
+                 "estimated; 'Analyse game audio' (or Describe music) measures them properly once.")
     return text
 
 
@@ -85,6 +91,14 @@ class BuildPage(QWidget):
         self.target.setRange(-30.0, -8.0)
         self.target.setDecimals(1)
         self.target.setSuffix(" LUFS")
+        self.floor = QDoubleSpinBox()
+        self.floor.setRange(0.0, 20.0)
+        self.floor.setDecimals(1)
+        self.floor.setSingleStep(1.0)
+        self.floor.setSuffix(" dB below the target")
+        self.floor.setToolTip("Automatic mode: a cue is never made quieter than this far below the loudness target, "
+                              "even if the original it replaces measured quieter (for example one quiet layer of a "
+                              "layered piece). Peaks are still never pushed into distortion.")
         self.make_zip = QCheckBox("Also create a .zip file")
         self.encoder_box = QComboBox()
         for key, label in ENCODER_LABELS.items():
@@ -93,7 +107,8 @@ class BuildPage(QWidget):
         for label, widget in (("Mod name", self.name), ("Author", self.author), ("Version", self.version),
                               ("Description", self.description), ("Layout", self.layout_box),
                               ("Audio format", self.encoder_box), ("Loudness", self.loudness_box),
-                              ("Loudness target", self.target), ("", self.make_zip)):
+                              ("Loudness target", self.target), ("Never quieter than", self.floor),
+                              ("", self.make_zip)):
             form.addRow(label, widget)
         settings_card.body.addLayout(form)
         top.addWidget(settings_card, 3)
@@ -166,6 +181,7 @@ class BuildPage(QWidget):
         self.layout_box.setCurrentIndex(max(0, self.layout_box.findData(s.layout)))
         self.loudness_box.setCurrentIndex(max(0, self.loudness_box.findData(s.loudness_mode)))
         self.target.setValue(s.target_lufs)
+        self.floor.setValue(s.match_floor_db)
         self._loudness_changed()
         self.make_zip.setChecked(s.make_zip)
         self.encoder_box.blockSignals(True)
@@ -215,7 +231,8 @@ class BuildPage(QWidget):
         return replace(base, mod_name=self.name.text().strip() or base.mod_name, author=self.author.text().strip(),
                        version=self.version.text().strip() or "1.0.0", description=self.description.text().strip(),
                        layout=self.layout_box.currentData(), loudness_mode=self.loudness_box.currentData(),
-                       target_lufs=self.target.value(), make_zip=self.make_zip.isChecked(),
+                       target_lufs=self.target.value(), match_floor_db=self.floor.value(),
+                       make_zip=self.make_zip.isChecked(),
                        encoder=self.encoder_box.currentData())
 
     # ------------------------------------------------------------------ Wwise
@@ -237,6 +254,7 @@ class BuildPage(QWidget):
     def _loudness_changed(self, _index: int = 0) -> None:
         mode = self.loudness_box.currentData()
         self.target.setEnabled(mode != "off")
+        self.floor.setEnabled(mode == "match")
         self.target.setToolTip("The loudness every replacement gets." if mode == "fixed" else
                                "Used only for cues whose original music was not measured." if mode == "match" else
                                "Not used: tracks keep their own level.")

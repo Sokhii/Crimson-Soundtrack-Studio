@@ -54,6 +54,7 @@ class BuildSettings:
     loudness_mode: str = "match"         # match (each cue as loud as the original it replaces) | fixed | off
     target_lufs: float = -16.0           # fixed mode; in match mode for cues whose original was not measured
     ceiling_dbtp: float = -1.0           # no replacement's true peak goes above this (no limiter, no distortion)
+    match_floor_db: float = 6.0          # match mode: a cue is never aimed more than this far below target_lufs
     make_zip: bool = True
     encoder: str = "pcm"                 # wwise_vorbis (needs Wwise) | pcm (no extra software; not proven in game)
 
@@ -293,9 +294,18 @@ class ModBuilder:
         else:
             target = self.settings.target_lufs
             source = "fixed target" if mode == "fixed" else "fixed target (the original was not measured)"
+        floored = False
+        if mode == "match" and target is not None:
+            # A measured original can be far quieter than a full mix should be (one layer of several, an ambient bed,
+            # a quiet file the game turns up in its banks): never aim more than match_floor_db below the target.
+            floor = self.settings.target_lufs - max(0.0, self.settings.match_floor_db)
+            if target < floor:
+                target, floored = floor, True
         out, result = level(timeline, TARGET_RATE, target, self.settings.ceiling_dbtp, measured=measured)
         info = result.to_dict()
         info["loudness_reference"] = source
+        if floored:
+            info["raised_to_floor"] = True
         if ref.get("lufs") is not None:
             info["original_lufs"] = ref["lufs"]
         return out, info
@@ -391,7 +401,10 @@ def loudness_summary(cues: Dict[str, Any], settings: BuildSettings) -> Dict[str,
         sources[key] = sources.get(key, 0) + 1
     return {"mode": settings.loudness_mode, "ceiling_dbtp": settings.ceiling_dbtp, "cues": len(cues),
             "reached_target": len(short) - len(below), "below_target": len(below),
-            "most_below_db": round(max(below), 1) if below else 0.0, "references": sources}
+            "most_below_db": round(max(below), 1) if below else 0.0, "references": sources,
+            "raised_to_floor": sum(1 for c in cues.values() if c.get("raised_to_floor")),
+            "floor_lufs": settings.target_lufs - settings.match_floor_db if settings.loudness_mode == "match" else None,
+            "estimated": sum(1 for c in cues.values() if "estimated" in c.get("loudness_reference", ""))}
 
 
 def _readme(name: str, report: Dict[str, Any], settings: BuildSettings) -> str:

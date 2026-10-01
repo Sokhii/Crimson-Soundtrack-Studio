@@ -226,19 +226,22 @@ class GameAudioAnalyzer:
             if progress:
                 progress(label, index, len(ids))
             res = self.cached(sid, listen_key if listener else "")
-            need_measure = res.status == "pending" or (retry_errors and res.status == "error")
+            # measurements from before 0.14 have no loudness (LUFS): decode once more and measure again
+            stale = res.status == "ok" and "loudness_lufs" not in (res.features or {})
+            need_measure = res.status == "pending" or stale or (retry_errors and res.status == "error")
             need_listen = listener is not None and res.status != "missing" and not res.listening \
                 and not (res.status == "error" and not retry_errors)
             if not need_measure and not need_listen:
                 results[sid] = res
                 continue
-            results[sid] = self._process(sid, res, listener if need_listen else None, listen_key, work, cancel)
+            results[sid] = self._process(sid, res, listener if need_listen else None, listen_key, work, cancel,
+                                         remeasure=stale)
         if progress:
             progress(label, len(ids), len(ids))
         return results
 
     def _process(self, sid: int, res: SourceResult, listener: Optional[Listener], listen_key: str, work: Path,
-                 cancel) -> SourceResult:
+                 cancel, remeasure: bool = False) -> SourceResult:
         loc = self.locate(sid)
         if loc is None:
             return res
@@ -253,7 +256,7 @@ class GameAudioAnalyzer:
             del data
             decode(self.vgmstream, wem, wav)
             wem.unlink(missing_ok=True)
-            if res.status != "ok":
+            if res.status != "ok" or remeasure:
                 features = self._measure(wav, cancel)
                 res.features = features
                 res.decoded_s = features.get("decoded_duration_s")
@@ -268,19 +271,22 @@ class GameAudioAnalyzer:
         except OperationCancelled:
             raise
         except (DecodeError, CompileError) as exc:
-            res.status, res.error = "error", f"{exc.message} {exc.details}".strip()[:500]
-            if loc.key:
-                self.cache.put_measure(loc.key, "error", None, res.error)
-            log.warning("Game audio %s: %s", sid, res.error)
+            self._failed(sid, res, loc, f"{exc.message} {exc.details}".strip()[:500], remeasure)
         except (OSError, RuntimeError, ValueError) as exc:
-            res.status, res.error = "error", f"{type(exc).__name__}: {exc}"[:500]
-            if loc.key:
-                self.cache.put_measure(loc.key, "error", None, res.error)
-            log.warning("Game audio %s: %s", sid, res.error)
+            self._failed(sid, res, loc, f"{type(exc).__name__}: {exc}"[:500], remeasure)
         finally:
             wem.unlink(missing_ok=True)
             wav.unlink(missing_ok=True)
         return res
+
+    def _failed(self, sid: int, res: SourceResult, loc, error: str, remeasure: bool) -> None:
+        if remeasure:                       # keep the earlier measurement; only the added loudness is missing
+            log.warning("Game audio %s: loudness could not be measured again: %s", sid, error)
+            return
+        res.status, res.error = "error", error
+        if loc.key:
+            self.cache.put_measure(loc.key, "error", None, res.error)
+        log.warning("Game audio %s: %s", sid, res.error)
 
     @staticmethod
     def _measure(wav: Path, cancel) -> Dict[str, Any]:
