@@ -230,6 +230,20 @@ def test_listening_model_panel_and_game_audio_buttons(app, window, tmp_path, mon
     assert "Measured from the game audio" in html and "Heard by the listening model" in html
 
 
+def test_matching_page_max_uses_setting_is_saved_and_follows_reuse(app, window):
+    studio = window.studio
+    page = window.pages["matching"]
+    assert page.max_uses.value() == 0 and page.max_uses.specialValueText() == "Automatic"
+    page.max_uses.setValue(3)
+    assert studio.settings.max_uses_per_track == 3
+    page.allow_reuse.setChecked(False)
+    assert not page.max_uses.isEnabled()
+    page.allow_reuse.setChecked(True)
+    assert page.max_uses.isEnabled()
+    page.max_uses.setValue(0)
+    assert studio.settings.max_uses_per_track == 0
+
+
 def test_matching_page_toggle_switches_between_standout_and_legacy(app, window, tmp_path, monkeypatch):
     pytest.importorskip("onnxruntime")
     pytest.importorskip("onnx")

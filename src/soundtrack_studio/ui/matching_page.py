@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox, QHBoxLayout, QHeaderView,
-                               QLabel, QLineEdit, QPushButton, QSplitter, QTableWidget, QTableWidgetItem, QTextBrowser,
+                               QLabel, QLineEdit, QPushButton, QSpinBox, QSplitter, QTableWidget, QTableWidgetItem, QTextBrowser,
                                QVBoxLayout, QWidget)
 
 from ..matching.engine import MatchSettings, confidence_label
@@ -103,12 +103,24 @@ class MatchingPage(QWidget):
         self.standout.toggled.connect(self._standout_toggled)
         self.allow_reuse = QCheckBox("Allow a track for several cues")
         self.allow_reuse.setChecked(True)
+        self.max_uses = QSpinBox()
+        self.max_uses.setRange(0, 50)
+        self.max_uses.setSpecialValueText("Automatic")
+        self.max_uses.setPrefix("Up to ")
+        self.max_uses.setSuffix(" cues per track")
+        self.max_uses.setValue(max(0, min(50, host.studio.settings.max_uses_per_track)))
+        self.max_uses.setToolTip(
+            "The most game cues one of your tracks may be proposed for. 1 uses every track once; a higher number "
+            "allows more repeats. Automatic spreads the tracks evenly so that every cue gets a proposal.\n"
+            "Cues left without a track keep the game's original music.")
+        self.max_uses.valueChanged.connect(self._max_uses_changed)
+        self.allow_reuse.toggled.connect(self.max_uses.setEnabled)
         self.include_short = QCheckBox("Include short/transition cues")
         self.include_short.toggled.connect(lambda _v: self.refresh())
         self.accept_all_btn = QPushButton("Accept all high-confidence")
         self.accept_all_btn.clicked.connect(self.accept_all)
         for w in (self.describe_btn, self.match_btn, self.use_ai, self.standout, self.use_sound, self.allow_reuse,
-                  self.include_short):
+                  self.max_uses, self.include_short):
             bar.addWidget(w)
         bar.addStretch(1)
         bar.addWidget(self.accept_all_btn)
@@ -388,10 +400,16 @@ class MatchingPage(QWidget):
         studio.settings.matching_mode = "standout" if checked else "legacy"
         studio.settings.save(studio.paths)
 
+    def _max_uses_changed(self, value: int) -> None:
+        studio = self.host.studio
+        studio.settings.max_uses_per_track = int(value)
+        studio.settings.save(studio.paths)
+
     def find_matches(self) -> None:
         settings = MatchSettings(mode="standout" if self.standout.isChecked() else "legacy",
                                  include_short_cues=self.include_short.isChecked(),
-                                 allow_reuse=self.allow_reuse.isChecked(), use_ai=self.use_ai.isChecked(),
+                                 allow_reuse=self.allow_reuse.isChecked(),
+                                 max_uses_per_track=self.max_uses.value(), use_ai=self.use_ai.isChecked(),
                                  use_sound=self.use_sound.isChecked())
 
         def done(stats) -> None:

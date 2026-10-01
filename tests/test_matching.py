@@ -81,6 +81,18 @@ def test_no_reuse_leaves_cues_unmatched(model):
     assert any("also proposed" in w for r in reuse.values() for w in r.candidates[0].warnings)
 
 
+def test_max_uses_per_track_caps_repeats(model):
+    only_dark = [tracks()[0]]
+    cues = len([c for c in model.cues if not engine.is_short(c)])
+    assert cues >= 3
+    for limit in (1, 2):
+        results = Matcher(model, cue_profiles(), only_dark, MatchSettings(max_uses_per_track=limit)).run()
+        assert sum(1 for r in results.values() if r.candidates) == limit
+    # the cap only applies while reuse is allowed; 0 stays automatic (every cue gets a proposal)
+    auto = Matcher(model, cue_profiles(), only_dark, MatchSettings(max_uses_per_track=0)).run()
+    assert all(r.candidates for r in auto.values())
+
+
 def test_rejected_and_fixed_are_respected(model):
     results = Matcher(model, cue_profiles(), tracks(), MatchSettings(), rejected={"2001": {1}},
                       fixed={"2002": 1}).run()

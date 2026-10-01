@@ -36,6 +36,7 @@ class Settings:
     listening_model_id: str = ""              # optional listening model (CLAP); "" = off
     listening_device: str = "auto"            # auto (GPU when available) | cpu
     matching_mode: str = "standout"           # "standout" = compare standout scores | "legacy" = tag matching
+    max_uses_per_track: int = 0               # most cues one track may be proposed for (0 = automatic)
     window_geometry: str = ""                 # hex-encoded QByteArray
     extra: Dict[str, Any] = field(default_factory=dict)
 
