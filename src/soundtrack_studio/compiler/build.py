@@ -35,7 +35,7 @@ from . import bnk, wem
 from .archive import CompileError, GameFileReader
 from .audio import TARGET_RATE, FitSettings, map_channels, render_timeline, slice_timeline
 from .plan import build_plan, timeline_slice_frames
-from .validate import ValidationResult, validate_output
+from .validate import REPORT_NAME, ValidationResult, validate_output
 
 log = logging.getLogger(__name__)
 
@@ -189,7 +189,7 @@ class ModBuilder:
                     "name": mod_name, "version": self.settings.version, "author": self.settings.author,
                     "description": self.settings.description or "Music replacement built with Crimson Soundtrack Studio.",
                     "files_dir": "files"}, indent=2, ensure_ascii=False), encoding="utf-8")
-            (mod_dir / "build_report.json").write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
+            (mod_dir / REPORT_NAME).write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
             (mod_dir / "README.txt").write_text(_readme(mod_name, report, self.settings), encoding="utf-8")
 
             # 4. validate what was written, then publish
@@ -200,7 +200,7 @@ class ModBuilder:
                 validation.error("The game files changed during the build (they must never be modified).")
             report["validation"] = asdict(validation)
             report["elapsed_s"] = round(time.monotonic() - started, 1)
-            (mod_dir / "build_report.json").write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
+            (mod_dir / REPORT_NAME).write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
             if not validation.ok:
                 raise CompileError("The built mod failed validation and was not saved.",
                                    details="\n".join(validation.errors[:20]))

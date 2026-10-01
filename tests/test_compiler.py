@@ -212,7 +212,8 @@ def test_end_to_end_build(built):
     assert manifest["format"] == "crimson_browser_mod_v1" and manifest["files_dir"] == "files"
     files = sorted(p.relative_to(out / "files").as_posix() for p in (out / "files").rglob("*") if p.is_file())
     assert files == ["0004/sound/433831842.wem", "0004/sound/480286974.wem", "0004/sound/bgm.bnk"]
-    report = json.loads((out / "build_report.json").read_text())
+    report = json.loads((out / "css_build_report.json").read_text())
+    assert not (out / "build_report.json").exists()          # DMM would try to read that name as its own format
     assert report["cues"]["2003"]["fit"].startswith("looped") and report["validation"]["ok"]
     long_wem = wem.read_wem_info((out / "files/0004/sound/433831842.wem").read_bytes())
     assert long_wem.frames == 180 * 48000 and long_wem.channels == 2  # exact segment length
