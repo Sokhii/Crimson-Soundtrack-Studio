@@ -208,8 +208,9 @@ audio" (`loudness_lufs` in the game-audio measurements; measurements made before
 which the target is estimated); in *fixed* mode towards the Build page's target (also the fallback for cues whose
 original was not measured); in *off* mode the track keeps its level. The gain is capped so the true peak stays at or
 below -1 dBTP (room for the Vorbis encoder's small overshoot); a cue that cannot reach its target stays quieter, and
-the report records target, gain and shortfall per cue plus a summary. A matched target is never more than
-`match_floor_db` (default 6 dB) below the Build page's target: a measured original can be far quieter than a full mix
+the report records target, gain and shortfall per cue plus a summary. `match_offset_db` (Build page: "Louder than the
+original by", default 0) shifts every matched target up or down relative to its original. A matched target is never
+more than `match_floor_db` (default 6 dB) below the Build page's target: a measured original can be far quieter than a full mix
 should be (one layer of several, an ambient bed). Game measurements without `loudness_lufs` (made before 0.14) are
 measured again, once, by the next "Analyse game audio"/"Describe music"; a failed re-measurement keeps the old one.
 (0.14.0's estimate from those older RMS levels, which include silence, came out far too quiet in a real build.) In-bank volumes are not changed.

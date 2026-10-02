@@ -54,6 +54,7 @@ class BuildSettings:
     loudness_mode: str = "match"         # match (each cue as loud as the original it replaces) | fixed | off
     target_lufs: float = -16.0           # fixed mode; in match mode for cues whose original was not measured
     ceiling_dbtp: float = -1.0           # no replacement's true peak goes above this (no limiter, no distortion)
+    match_offset_db: float = 0.0         # match mode: aim this many dB above (+) or below (-) each original's loudness
     match_floor_db: float = 6.0          # match mode: a cue is never aimed more than this far below target_lufs
     make_zip: bool = True
     encoder: str = "pcm"                 # wwise_vorbis (needs Wwise) | pcm (no extra software; not proven in game)
@@ -287,10 +288,11 @@ class ModBuilder:
         if mode == "off":
             target, source = None, "own level (only lowered if its peaks were too high)"
         elif mode == "match" and ref.get("lufs") is not None:
-            target, source = float(ref["lufs"]), "original (measured loudness)"
+            target, source = float(ref["lufs"]) + self.settings.match_offset_db, "original (measured loudness)"
         elif mode == "match" and ref.get("rms") is not None and measured is not None:
             ours_rms = 20 * np.log10(max(float(np.sqrt(np.mean(timeline.astype(np.float64) ** 2))), 1e-9))
-            target, source = measured + (float(ref["rms"]) - ours_rms), "original (estimated from its average level)"
+            target = measured + (float(ref["rms"]) - ours_rms) + self.settings.match_offset_db
+            source = "original (estimated from its average level)"
         else:
             target = self.settings.target_lufs
             source = "fixed target" if mode == "fixed" else "fixed target (the original was not measured)"
@@ -400,6 +402,7 @@ def loudness_summary(cues: Dict[str, Any], settings: BuildSettings) -> Dict[str,
         key = c.get("loudness_reference", "")
         sources[key] = sources.get(key, 0) + 1
     return {"mode": settings.loudness_mode, "ceiling_dbtp": settings.ceiling_dbtp, "cues": len(cues),
+            "offset_db": settings.match_offset_db if settings.loudness_mode == "match" else None,
             "reached_target": len(short) - len(below), "below_target": len(below),
             "most_below_db": round(max(below), 1) if below else 0.0, "references": sources,
             "raised_to_floor": sum(1 for c in cues.values() if c.get("raised_to_floor")),

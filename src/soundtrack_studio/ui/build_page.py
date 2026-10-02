@@ -34,11 +34,17 @@ LAYOUT_LABELS = {"crimson_browser": "Mod manager package (manifest.json + files/
                  "package_folders": "Package folders only (0004/…) — alternative layout"}
 
 
+def _original_text(summary) -> str:
+    off = summary.get("offset_db") or 0.0
+    return f" ({abs(off):g} dB {'louder' if off > 0 else 'quieter'} than the original)" if off else \
+        " (the original's loudness)"
+
+
 def loudness_text(summary) -> str:
     if not summary or not summary.get("cues") or summary.get("mode") == "off":
         return ""
     text = (f"\n\nLoudness: {summary['reached_target']} of {summary['cues']} replacements reached their target"
-            + (" (the original's loudness)" if summary["mode"] == "match" else "") + ".")
+            + (_original_text(summary) if summary["mode"] == "match" else "") + ".")
     if summary.get("below_target"):
         text += (f" {summary['below_target']} stay up to {summary['most_below_db']:g} dB quieter so their peaks do "
                  "not distort.")
@@ -91,6 +97,15 @@ class BuildPage(QWidget):
         self.target.setRange(-30.0, -8.0)
         self.target.setDecimals(1)
         self.target.setSuffix(" LUFS")
+        self.offset = QDoubleSpinBox()
+        self.offset.setRange(-12.0, 12.0)
+        self.offset.setDecimals(1)
+        self.offset.setSingleStep(1.0)
+        self.offset.setSuffix(" dB vs the original")
+        self.offset.setToolTip("Automatic mode: each replacement is made this much louder (+) or quieter (-) than the "
+                               "original music it replaces. 0 = as loud as the original. The game's own music is "
+                               "fairly quiet, so +4 to +6 is a common choice. Peaks are still never pushed into "
+                               "distortion: a track that cannot go that loud stays a little quieter.")
         self.floor = QDoubleSpinBox()
         self.floor.setRange(0.0, 20.0)
         self.floor.setDecimals(1)
@@ -107,7 +122,8 @@ class BuildPage(QWidget):
         for label, widget in (("Mod name", self.name), ("Author", self.author), ("Version", self.version),
                               ("Description", self.description), ("Layout", self.layout_box),
                               ("Audio format", self.encoder_box), ("Loudness", self.loudness_box),
-                              ("Loudness target", self.target), ("Never quieter than", self.floor),
+                              ("Loudness target", self.target), ("Louder than the original by", self.offset),
+                              ("Never quieter than", self.floor),
                               ("", self.make_zip)):
             form.addRow(label, widget)
         settings_card.body.addLayout(form)
@@ -182,6 +198,7 @@ class BuildPage(QWidget):
         self.loudness_box.setCurrentIndex(max(0, self.loudness_box.findData(s.loudness_mode)))
         self.target.setValue(s.target_lufs)
         self.floor.setValue(s.match_floor_db)
+        self.offset.setValue(s.match_offset_db)
         self._loudness_changed()
         self.make_zip.setChecked(s.make_zip)
         self.encoder_box.blockSignals(True)
@@ -232,6 +249,7 @@ class BuildPage(QWidget):
                        version=self.version.text().strip() or "1.0.0", description=self.description.text().strip(),
                        layout=self.layout_box.currentData(), loudness_mode=self.loudness_box.currentData(),
                        target_lufs=self.target.value(), match_floor_db=self.floor.value(),
+                       match_offset_db=self.offset.value(),
                        make_zip=self.make_zip.isChecked(),
                        encoder=self.encoder_box.currentData())
 
@@ -255,6 +273,7 @@ class BuildPage(QWidget):
         mode = self.loudness_box.currentData()
         self.target.setEnabled(mode != "off")
         self.floor.setEnabled(mode == "match")
+        self.offset.setEnabled(mode == "match")
         self.target.setToolTip("The loudness every replacement gets." if mode == "fixed" else
                                "Used only for cues whose original music was not measured." if mode == "match" else
                                "Not used: tracks keep their own level.")

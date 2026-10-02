@@ -238,3 +238,28 @@ def test_build_message_explains_floor_and_estimates():
     text = loudness_text({"mode": "match", "cues": 10, "reached_target": 8, "below_target": 2, "most_below_db": 3.0,
                           "raised_to_floor": 4, "floor_lufs": -22.0, "estimated": 5})
     assert "raised to -22 LUFS" in text and "5 originals" in text and "Analyse game audio" in text
+
+
+def test_match_offset_makes_every_cue_louder_than_its_original(loud_built, monkeypatch):
+    from soundtrack_studio.compiler.build import BuildSettings
+
+    studio = loud_built
+    monkeypatch.setattr(studio, "loudness_references", lambda model, mapping: {"2001": {"lufs": -24.0, "rms": None}})
+    plain = studio.build_mod(BuildSettings(mod_name="Plain", loudness_mode="match", target_lufs=-16.0,
+                                           match_floor_db=20.0, make_zip=False))
+    boosted = studio.build_mod(BuildSettings(mod_name="Boost", loudness_mode="match", target_lufs=-16.0,
+                                             match_floor_db=20.0, match_offset_db=5.0, make_zip=False))
+    a, b = plain.report["cues"]["2001"], boosted.report["cues"]["2001"]
+    assert a["loudness_target_lufs"] == -24.0 and b["loudness_target_lufs"] == -19.0
+    assert b["gain_db"] - a["gain_db"] == pytest.approx(5.0, abs=0.01) or b["short_of_target_db"] > 0
+    assert b["true_peak_dbtp"] <= -1.0 + 1e-6                                 # still never past the ceiling
+    assert boosted.report["loudness"]["offset_db"] == 5.0 and plain.report["loudness"]["offset_db"] == 0.0
+
+
+def test_match_offset_text():
+    from soundtrack_studio.ui.build_page import loudness_text
+
+    base = {"mode": "match", "cues": 4, "reached_target": 4, "below_target": 0, "most_below_db": 0.0}
+    assert "5 dB louder than the original" in loudness_text({**base, "offset_db": 5.0})
+    assert "(the original's loudness)" in loudness_text({**base, "offset_db": 0.0})
+    assert "3 dB quieter than the original" in loudness_text({**base, "offset_db": -3.0})
