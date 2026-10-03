@@ -190,9 +190,18 @@ optional local-AI judgement of the top five only, then a diversity-aware assignm
 Every proposal carries reasons, warnings and a confidence that accounts for evidence quality. Only cues the
 user accepts or chooses form the build mapping.
 
+**Silent placeholders.** The game's music contains long silent clips that many segments share: two 60 s mono
+files (sources 4557375 and 735533924) are used by 41 and 13 segments, and 54 segments consist of nothing else
+(rests between pieces in the random playlists). Encoded silence is about 160 bytes per second per channel, against
+800+ for the quietest real music, so `MediaInfo.is_silent` treats a streamed file under 400 B/s/channel as silence
+and a cue whose every clip is silent is `silent`. Silent cues are never described, matched or listed, and the
+compiler never writes into a silent file (a segment made only of silence is skipped with a note; silent layers of
+other segments stay as they are). Before 0.14.5 such a cue could be matched like any other; the track chosen for
+it then played wherever the game expected a pause, which in practice meant one song everywhere.
+
 ## Compiler
 
-`plan` (primary track gets the music, other layers silence; all banks holding a source, including twins) →
+`plan` (primary track gets the music, other layers silence, shared silent placeholders untouched; all banks holding a source, including twins) →
 `audio` (decode, polyphase resample to 48 kHz, channel mapping, trim/loop/pad with fades, timeline slicing per
 clip) → `loudness` (one gain per cue, see below) → `wem` (Wwise PCM, or a `.wav` per source that `wwise` converts to
 Wwise Vorbis through the user's `WwiseConsole.exe`, 24 sources per run) → `archive` (read original banks through the

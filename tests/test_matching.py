@@ -123,6 +123,13 @@ def test_reset_forgets_proposals_decisions_and_runs(matched):
     assert store.proposals() and not store.decisions()
 
 
+def test_silent_cues_are_never_matched(model):
+    cue = next(c for c in model.cues if str(c.segment_id) == "2002")
+    cue.silent = True                              # a shared silent pause of the game's music
+    results = Matcher(model, cue_profiles(), tracks(), MatchSettings(include_short_cues=True)).run()
+    assert "2002" not in results and {"2001", "2003"} <= set(results)
+
+
 def test_rejected_and_fixed_are_respected(model):
     results = Matcher(model, cue_profiles(), tracks(), MatchSettings(), rejected={"2001": {1}},
                       fixed={"2002": 1}).run()

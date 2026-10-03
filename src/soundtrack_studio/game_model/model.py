@@ -21,6 +21,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional
 
 KIND_BY_TYPE = {10: "segment", 11: "track", 12: "switch", 13: "playlist"}
+SILENT_BYTES_PER_S = 400.0
 KIND_LABEL = {"segment": "Segment", "track": "Track", "switch": "Switch", "playlist": "Playlist"}
 
 
@@ -40,6 +41,17 @@ class MediaInfo:
     name: Optional[str] = None
     community: List[Dict[str, Any]] = field(default_factory=list)   # public research notes (via the Analyzer)
     found: bool = True                                      # False when no WEM record exists for the ID
+    stream_bytes: Optional[int] = None                      # size of the streamed/loose .wem file, when known
+
+    @property
+    def is_silent(self) -> bool:
+        """A silent placeholder: the game's music has long silent clips (rests between pieces, timing beds) that many
+        segments share. Encoded silence is tiny - about 160 bytes per second per channel in Crimson Desert, against
+        800+ for the quietest real music - so a file under 400 bytes/s/channel is treated as silence."""
+
+        if not self.stream_bytes or not self.duration_s or self.duration_s < 5:
+            return False
+        return self.stream_bytes / self.duration_s / max(1, self.channels or 1) < SILENT_BYTES_PER_S
 
 
 @dataclass
@@ -107,6 +119,7 @@ class MusicCue:
     streaming: List[str]
     is_transition: bool = False
     parent_count: int = 1                 # >1 when the segment is reused by several containers
+    silent: bool = False                  # every clip is silence (a rest/pause): never replaced
 
 
 @dataclass

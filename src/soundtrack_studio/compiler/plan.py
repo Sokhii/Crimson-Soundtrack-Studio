@@ -5,6 +5,9 @@ For every replaced segment (see docs/research/modding_format.md, section 3):
   gets the user's music; each of its clip sources receives the slice of the
   rendered timeline it plays;
 * every other track of the segment (simultaneous layers/stems) gets silence;
+* silent placeholder files (rests and timing beds that dozens of segments share, see ``MediaInfo.is_silent``) are
+  never touched: writing music into one would play it wherever the game expects a pause. A segment made only of
+  them is not replaced at all;
 * every bank that contains a patched source is patched (the Analyzer lists them
   in ``media_source``; the ``bgm`` bank has a twin with the same objects).
 """
@@ -61,8 +64,18 @@ def _coverage(node: MusicNode) -> float:
     return sum(c.source_duration_ms or 0 for c in node.clips)
 
 
+def _is_silent_source(model: GameMusicModel, source_id: int) -> bool:
+    info = model.media.get(source_id)
+    return info is not None and info.is_silent
+
+
+def _is_silent_track(model: GameMusicModel, track: MusicNode) -> bool:
+    return bool(track.source_ids) and all(_is_silent_source(model, s) for s in track.source_ids)
+
+
 def primary_track(model: GameMusicModel, segment: MusicNode) -> Optional[MusicNode]:
-    tracks = [model.nodes[c] for c in segment.children if c in model.nodes and model.nodes[c].kind == "track"]
+    tracks = [model.nodes[c] for c in segment.children if c in model.nodes and model.nodes[c].kind == "track"
+              and not _is_silent_track(model, model.nodes[c])]
     if not tracks:
         return None
     return sorted(tracks, key=lambda t: (-_coverage(t), segment.children.index(t.object_id)))[0]
@@ -81,6 +94,10 @@ def build_plan(model: GameMusicModel, conn, installation_id: int, mapping: List[
             plan.warnings.append(f"{segment.label} has no known duration and was skipped.")
             continue
         primary = primary_track(model, segment)
+        if primary is None and any(model.nodes[c].kind == "track" for c in segment.children if c in model.nodes):
+            plan.warnings.append(f"{segment.label} is a silent pause in the game's music (its audio is shared silence), "
+                                 "so it was not replaced.")
+            continue
         if primary is None:
             plan.warnings.append(f"{segment.label} has no music tracks and was skipped.")
             continue
@@ -100,6 +117,8 @@ def build_plan(model: GameMusicModel, conn, installation_id: int, mapping: List[
                          for s in track.source_ids]
             for clip in clips:
                 sid = clip.source_id
+                if _is_silent_source(model, sid):
+                    continue                 # shared silence stays silence
                 info = model.media.get(sid)
                 duration = (clip.source_duration_ms or 0) / 1000 or (info.duration_s if info and info.duration_s else 0)
                 if not duration:

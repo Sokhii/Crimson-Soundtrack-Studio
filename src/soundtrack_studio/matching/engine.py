@@ -268,7 +268,8 @@ class Matcher:
         self.ai_errors: List[str] = []
 
     def eligible_cues(self) -> List[MusicCue]:
-        return [c for c in self.model.cues if self.settings.include_short_cues or not is_short(c)]
+        return [c for c in self.model.cues
+                if not getattr(c, "silent", False) and (self.settings.include_short_cues or not is_short(c))]
 
     def run(self, progress: Optional[Callable[[str, int, int], None]] = None,
             cancel: Optional[Callable[[], bool]] = None) -> Dict[str, CueResult]:

@@ -354,3 +354,34 @@ def test_find_sources_ignores_lookalikes_of_the_source_entry():
     assert bnk.describe_sources(patched)[sid][0].plugin_id == bnk.PLUGIN_PCM
     # the look-alike bytes themselves are left alone
     assert patched.endswith(lookalike)
+
+
+def test_silent_placeholders_are_detected_and_never_replaced(built):
+    """Crimson Desert shares two silent 60 s clips (rests/timing beds) between dozens of segments. Writing music into
+    one played that song wherever the game expected a pause - in a real build, one track everywhere."""
+
+    from soundtrack_studio.compiler.plan import build_plan
+    from soundtrack_studio.game_model.model import MediaInfo
+    from soundtrack_studio.matching.store import MappingEntry
+
+    assert MediaInfo(1, channels=1, duration_s=60.0, stream_bytes=9466).is_silent           # the game's silence
+    assert not MediaInfo(1, channels=2, duration_s=119.0, stream_bytes=200000).is_silent    # quietest real music
+    assert not MediaInfo(1, channels=2, duration_s=60.0).is_silent                          # size unknown
+    assert not MediaInfo(1, channels=1, duration_s=2.0, stream_bytes=10).is_silent          # too short to judge
+
+    studio, _game, _music = built
+    model = studio.game_model()
+    assert model.media[433831842].stream_bytes and not any(c.silent for c in model.cues)
+    tracks = {t["title"]: t["id"] for t in studio.library_tracks()}
+    mapping = [MappingEntry("2001", tracks["Long Theme"], "auto", 0.0, "manual"),
+               MappingEntry("2003", tracks["Short Motif"], "auto", 0.0, "manual")]
+    normal = build_plan(model, analyzer_conn(), 1, mapping)
+    sources = {k: {sid for sid, j in normal.jobs.items() if j.cue_key == k} for k in ("2001", "2003")}
+    assert sources["2001"] and sources["2003"]
+    # make every source of cue 2001 silence: the cue is skipped with a note, the other cue is still built
+    for sid in sources["2001"]:
+        model.media[sid].stream_bytes = 100
+    plan = build_plan(model, analyzer_conn(), 1, mapping)
+    assert "2001" not in plan.cues and not any(j.cue_key == "2001" for j in plan.jobs.values())
+    assert any("silent pause" in w for w in plan.warnings)
+    assert "2003" in plan.cues and set(plan.jobs) >= sources["2003"]

@@ -20,7 +20,7 @@ from .model import (KIND_BY_TYPE, BankInfo, GameMusicModel, MediaInfo, MusicCue,
 
 log = logging.getLogger(__name__)
 
-BUILDER_VERSION = 2
+BUILDER_VERSION = 3
 # reference kinds from a container to something it plays (same set the Analyzer walks)
 CHILD_KINDS = ("child", "playlist_segment", "switch_assoc")
 PARSE_RANK = {"parsed": 3, "shallow": 2, "partial": 1}
@@ -157,7 +157,9 @@ def build(reader: AnalyzerReader, sha: str, inst_id: int,
             paths=sorted({loc["path"] for loc in row["locations"]}),
             streaming=sorted(set(streaming.get(sid, []))), has_loop_points=bool(row.get("loops")),
             role=row.get("role"), role_confidence=row.get("role_confidence"), name=media_names.get(sid),
-            community=community.get(sid, []))
+            community=community.get(sid, []),
+            stream_bytes=max((loc.get("size") or 0 for loc in row["locations"]
+                              if loc.get("container") != "embedded"), default=0) or None)
     if missing_media:
         warnings.append(f"{missing_media} media IDs referenced by music tracks have no WEM record in the Analyzer "
                         "database (possibly cut content or files outside the scanned archives).")
@@ -313,7 +315,8 @@ def _build_cues(nodes: Dict[int, MusicNode], media: Dict[int, MediaInfo], event_
             event_names=[event_names[e] for e in events if e in event_names], banks=banks,
             codecs=sorted({m.codec for m in infos if m.codec}), channels=sorted({m.channels for m in infos if m.channels}),
             streaming=sorted({s for m in infos for s in m.streaming}), is_transition=oid in transitions,
-            parent_count=max(1, len(node.parent_ids))))
+            parent_count=max(1, len(node.parent_ids)),
+            silent=bool(infos) and len(infos) == len(sources) and all(m.is_silent for m in infos)))
     cues.sort(key=lambda c: (c.path_labels, c.segment_id))
     return cues
 

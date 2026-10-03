@@ -42,6 +42,8 @@ log = logging.getLogger(__name__)
 
 OK, WARN, MISSING, UNAVAILABLE = "ok", "warning", "missing", "unavailable"
 SHORT_CUE_MS = 15000  # transition-length segments are kept original by default
+SILENT_CUE_NOTE = ("A silent pause in the game's music (shared by many segments), so it is never replaced; "
+                   "a track chosen for it is left out of the build.")
 
 
 @dataclass
@@ -793,7 +795,7 @@ class Studio:
         audio = self.game_audio_results()
         items = []
         for c in model.cues:
-            if include_short_cues or not self.is_short_cue(c):
+            if not c.silent and (include_short_cues or not self.is_short_cue(c)):
                 measured, heard = self.cue_audio(c, audio) if audio else (None, None)
                 items.append((str(c.segment_id), cue_document(model, c, measured, self.heard_summary(heard, game_only=True))))
         return items
@@ -943,7 +945,7 @@ class Studio:
         rows = []
         for cue in model.cues:
             key = str(cue.segment_id)
-            if not include_short and self.is_short_cue(cue) and key not in decisions:
+            if (cue.silent or (not include_short and self.is_short_cue(cue))) and key not in decisions:
                 continue
             decision = decisions.get(key)
             props = proposals.get(key, [])
@@ -952,8 +954,11 @@ class Studio:
             else:
                 status = {"accept": "accepted", "manual": "chosen", "reject": "rejected",
                           "keep_original": "keep original"}[decision.action]
+            reason = skipped.get(key, "")
+            if cue.silent:
+                reason = SILENT_CUE_NOTE
             rows.append({"cue": cue, "key": key, "proposals": props, "decision": decision, "status": status,
-                         "skipped_reason": skipped.get(key, "")})
+                         "skipped_reason": reason})
         return rows
 
     # ----------------------------------------------------------------- build
