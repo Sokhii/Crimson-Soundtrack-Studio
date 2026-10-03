@@ -155,6 +155,15 @@ def test_matching_page_review_flow(app, window, tmp_path, game, analyzer_db):
     assert len(visible) == 1
     page.include_short.setChecked(True)
     assert page.table.rowCount() == 4
+    # Reset matches: asks first, then every proposal and decision is gone
+    page.status_filter.setCurrentText("All")
+    window.confirm = lambda *_a: False
+    page.reset_matches()
+    assert any(r["status"] == "accepted" for r in page.rows)
+    window.confirm = lambda *_a: True
+    page.reset_matches()
+    assert not studio.match_store().decisions() and not studio.match_store().proposals()
+    assert all(r["status"] not in ("accepted", "keep original", "proposed") for r in page.rows)
 
 
 def test_build_page_builds_a_mod(app, window, tmp_path, monkeypatch):

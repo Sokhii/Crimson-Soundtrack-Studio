@@ -14,7 +14,7 @@ Crimson Desert ──► Crimson Desert Analyzer ──► Analyzer SQLite DB �
                                                       your music library   local AI (llama.cpp)
 ```
 
-> **Status: 0.14.3 (feature-complete beta).** The whole workflow works end to end: project → game → Analyzer
+> **Status: 0.14.4 (feature-complete beta).** The whole workflow works end to end: project → game → Analyzer
 > database → music library → local AI (optional) → thematic matching → review → build → validated mod
 > package. **It has not yet been verified in the game itself** (the development environment has no game
 > install). Please report results, including which package layout your mod manager imports (see
@@ -47,6 +47,7 @@ Crimson Desert ──► Crimson Desert Analyzer ──► Analyzer SQLite DB �
    (0-100 scores per word, relative to all the music analysed, so words that fit everything stop counting) and by
    how much a track *sounds like* the original. "Match by standout scores" on the Matching page switches back to
    the legacy tag-overlap matching at any time. Optionally the local AI judges the top five candidates per cue.
+   "Reset matches…" deletes every proposal and decision so you can match again from scratch with new settings.
 8. **Review**: accept, reject, choose another track, keep the original, set the fit mode (trim / loop / play
    once) and a start offset. Only what you accept or choose is built; re-running matching never changes your
    decisions.

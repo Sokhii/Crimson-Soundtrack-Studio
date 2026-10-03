@@ -166,6 +166,18 @@ class MatchStore:
             count += 1
         return count
 
+    def reset(self) -> Dict[str, int]:
+        """Forget every proposal, decision (accepted, chosen, rejected, keep original, fit) and matching run, so the
+        next run starts from scratch. Descriptions, listening results and the library are not touched."""
+
+        counts = {"proposals": len(self.proposals()), "decisions": len(self.decisions())}
+        with self.project.transaction() as conn:
+            conn.execute("DELETE FROM match_proposal")
+            conn.execute("DELETE FROM match_decision")
+            conn.execute("DELETE FROM match_run")
+        self.project.set("matching_skipped", {})
+        return counts
+
     def rejected_map(self) -> Dict[str, Set[int]]:
         return {k: set(d.rejected) for k, d in self.decisions().items() if d.rejected}
 

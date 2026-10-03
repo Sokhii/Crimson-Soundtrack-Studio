@@ -94,6 +94,10 @@ class MatchingPage(QWidget):
         self.redescribe_btn.clicked.connect(host.redescribe_music)
         self.match_btn = QPushButton("2. Find matches")
         self.match_btn.clicked.connect(self.find_matches)
+        self.reset_btn = QPushButton("Reset matches…")
+        self.reset_btn.setToolTip("Delete every match and decision (accepted, chosen, rejected, keep original) so you "
+                                  "can match again from scratch with new settings. Descriptions are kept.")
+        self.reset_btn.clicked.connect(self.reset_matches)
         self.use_ai = QCheckBox("Use local AI to judge the best candidates")
         self.use_sound = QCheckBox("Compare how they sound")
         self.use_sound.setChecked(True)
@@ -137,7 +141,7 @@ class MatchingPage(QWidget):
             action.toggled.connect(self._approve_levels_changed)
             self.approve_actions[level] = action
         self.accept_all_btn.setMenu(self.approve_menu)
-        for w in (self.describe_btn, self.redescribe_btn, self.match_btn, self.use_ai, self.standout, self.use_sound, self.allow_reuse,
+        for w in (self.describe_btn, self.redescribe_btn, self.match_btn, self.reset_btn, self.use_ai, self.standout, self.use_sound, self.allow_reuse,
                   self.max_uses, self.include_short):
             bar.addWidget(w)
         bar.addStretch(1)
@@ -211,7 +215,7 @@ class MatchingPage(QWidget):
     def refresh(self) -> None:
         studio = self.host.studio
         has_data = studio.project is not None and studio.project.active_analyzer() is not None
-        for w in (self.describe_btn, self.match_btn, self.accept_all_btn):
+        for w in (self.describe_btn, self.match_btn, self.accept_all_btn, self.reset_btn):
             w.setEnabled(has_data)
         self.redescribe_btn.setEnabled(has_data and studio.active_model() is not None)
         listening = studio.active_listening_model() is not None
@@ -444,6 +448,22 @@ class MatchingPage(QWidget):
         studio = self.host.studio
         studio.settings.max_uses_per_track = int(value)
         studio.settings.save(studio.paths)
+
+    def reset_matches(self) -> None:
+        store = self.host.studio.match_store()
+        counts = store.status_counts()
+        decided = counts["accepted"] + counts["manual"] + counts["rejected"] + counts["keep_original"]
+        if not self.host.confirm(
+                "Reset matches",
+                f"Delete all matches? This removes every proposal and all {decided} of your decisions "
+                "(accepted, chosen, rejected and keep original, with their fit settings), so you can run "
+                "'Find matches' again with new settings.\n\nDescriptions and your music library are kept. "
+                "This cannot be undone."):
+            return
+        store.reset()
+        self.current_key = None
+        self._after()
+        self.host.statusBar().showMessage("All matches were reset. Run 'Find matches' to match again.", 15000)
 
     def find_matches(self) -> None:
         settings = MatchSettings(mode="standout" if self.standout.isChecked() else "legacy",

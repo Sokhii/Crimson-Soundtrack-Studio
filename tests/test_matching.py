@@ -107,6 +107,22 @@ def test_accept_all_only_takes_the_chosen_confidence_levels(matched):
     assert store.accept_all(levels=("high", "medium", "low")) == len(labels) - expected
 
 
+def test_reset_forgets_proposals_decisions_and_runs(matched):
+    studio, _ = matched
+    store = studio.match_store()
+    keys = [k for k, p in store.proposals().items() if p]
+    store.accept(keys[0], store.proposals()[keys[0]][0].track_id)
+    store.keep_original(keys[-1])
+    assert store.last_run() is not None and store.decisions()
+    counts = store.reset()
+    assert counts["proposals"] > 0 and counts["decisions"] == 2
+    assert store.proposals() == {} and store.decisions() == {} and store.last_run() is None
+    assert store.skipped() == {} and store.final_mapping() == []
+    # matching again starts from scratch
+    studio.find_matches()
+    assert store.proposals() and not store.decisions()
+
+
 def test_rejected_and_fixed_are_respected(model):
     results = Matcher(model, cue_profiles(), tracks(), MatchSettings(), rejected={"2001": {1}},
                       fixed={"2002": 1}).run()
